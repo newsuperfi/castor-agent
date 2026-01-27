@@ -1,0 +1,158 @@
+{
+  "name": "castor",
+  "displayName": "Castor Agent",
+  "description": "무한 AI 코딩 에이전트 - 무료 AI 리소스 활용",
+  "version": "0.0.1",
+  "type": "module",
+  "publisher": "wonhee",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Machine Learning",
+    "Other"
+  ],
+  "keywords": [
+    "ai",
+    "agent",
+    "coding",
+    "gemini",
+    "claude"
+  ],
+  "icon": "assets/icon.png",
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "castor-sidebar",
+          "title": "Castor Agent",
+          "icon": "assets/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "castor-sidebar": [
+        {
+          "type": "webview",
+          "id": "castor.chatView",
+          "name": "Chat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "castor.startChat",
+        "title": "Castor: 채팅 시작"
+      },
+      {
+        "command": "castor.openPlan",
+        "title": "Castor: 플래닝 보드 열기"
+      },
+      {
+        "command": "castor.login",
+        "title": "Castor: Antigravity 로그인"
+      },
+      {
+        "command": "castor.logout",
+        "title": "Castor: 로그아웃"
+      },
+      {
+        "command": "castor.selectModel",
+        "title": "Castor: 모델 선택"
+      }
+    ],
+    "configuration": {
+      "title": "Castor Agent",
+      "properties": {
+        "castor.autoRunMode": {
+          "type": "string",
+          "default": "Balanced",
+          "enum": [
+            "Strict",
+            "Balanced",
+            "High_Risk",
+            "God_Mode"
+          ],
+          "enumDescriptions": [
+            "모든 명령어 및 파일 수정에 승인 필요",
+            "읽기는 자동, 쓰기/실행은 승인 필요",
+            "파괴적 명령어만 승인 필요",
+            "모든 행위 자동 승인 (위험)"
+          ],
+          "description": "에이전트 실행 권한 레벨"
+        },
+        "castor.defaultModel": {
+          "type": "string",
+          "default": "gemini-3-flash-preview",
+          "enum": [
+            "gemini-3-pro-preview",
+            "gemini-3-flash-preview",
+            "claude-opus-4.5",
+            "claude-sonnet-4.5",
+            "gemini-2.5-pro",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite"
+          ],
+          "description": "기본 AI 모델"
+        },
+        "castor.thinkingLevel": {
+          "type": "string",
+          "default": "HIGH",
+          "enum": [
+            "HIGH",
+            "LOW",
+            "MINIMAL"
+          ],
+          "enumDescriptions": [
+            "깊은 추론 (느림, 정확)",
+            "빠른 추론",
+            "최소 추론 (빠름)"
+          ],
+          "description": "AI 사고 레벨 (Gemini 3)"
+        },
+        "castor.thinkingBudget": {
+          "type": "number",
+          "default": 8192,
+          "minimum": 1024,
+          "maximum": 32768,
+          "description": "사고 토큰 예산 (Gemini 2.5)"
+        },
+        "castor.maxTurns": {
+          "type": "number",
+          "default": 10,
+          "minimum": 1,
+          "maximum": 50,
+          "description": "에이전트 최대 반복 횟수"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "test": "node ./out/test/runTest.js",
+    "lint": "eslint src --ext ts",
+    "build:webview": "cd webview-ui && npm run build",
+    "build": "npm run build:webview && npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "@types/vscode": "^1.85.0",
+    "@typescript-eslint/eslint-plugin": "^6.13.0",
+    "@typescript-eslint/parser": "^6.13.0",
+    "eslint": "^8.54.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "@google/genai": "^1.0.0",
+    "axios": "^1.6.0",
+    "async-mutex": "^0.4.0",
+    "simple-git": "^3.21.0",
+    "puppeteer-core": "^21.6.0"
+  }
+}
