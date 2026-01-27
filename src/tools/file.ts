@@ -1,0 +1,109 @@
+/**
+ * File System Tools - 파일 읽기/쓰기/목록
+ */
+
+import * as fs from "fs/promises";
+import * as path from "path";
+import type { ITool } from "./registry.js";
+
+/**
+ * read_file: 파일 내용 읽기
+ */
+export const readFileTool: ITool = {
+  name: "read_file",
+  description: "파일 내용을 읽습니다.",
+  parameters: {
+    path: {
+      type: "string",
+      description: "읽을 파일의 절대 경로",
+      required: true,
+    },
+  },
+  async execute(args: Record<string, unknown>): Promise<string> {
+    const filePath = args.path as string;
+    if (!filePath) {
+      throw new Error("path 파라미터가 필요합니다.");
+    }
+
+    try {
+      const content = await fs.readFile(filePath, "utf-8");
+      return content;
+    } catch (err) {
+      throw new Error(`파일 읽기 실패: ${filePath} - ${err}`);
+    }
+  },
+};
+
+/**
+ * write_file: 파일 내용 쓰기
+ */
+export const writeFileTool: ITool = {
+  name: "write_file",
+  description: "파일에 내용을 씁니다. 파일이 없으면 생성합니다.",
+  parameters: {
+    path: {
+      type: "string",
+      description: "쓸 파일의 절대 경로",
+      required: true,
+    },
+    content: {
+      type: "string",
+      description: "파일에 쓸 내용",
+      required: true,
+    },
+  },
+  async execute(args: Record<string, unknown>): Promise<string> {
+    const filePath = args.path as string;
+    const content = args.content as string;
+
+    if (!filePath || content === undefined) {
+      throw new Error("path와 content 파라미터가 필요합니다.");
+    }
+
+    try {
+      // 디렉토리 생성 (없으면)
+      await fs.mkdir(path.dirname(filePath), { recursive: true });
+      await fs.writeFile(filePath, content, "utf-8");
+      return `파일 저장 완료: ${filePath}`;
+    } catch (err) {
+      throw new Error(`파일 쓰기 실패: ${filePath} - ${err}`);
+    }
+  },
+};
+
+/**
+ * list_dir: 디렉토리 목록
+ */
+export const listDirTool: ITool = {
+  name: "list_dir",
+  description: "디렉토리의 파일과 폴더 목록을 반환합니다.",
+  parameters: {
+    path: {
+      type: "string",
+      description: "목록을 조회할 디렉토리 경로",
+      required: true,
+    },
+  },
+  async execute(args: Record<string, unknown>): Promise<string> {
+    const dirPath = args.path as string;
+    if (!dirPath) {
+      throw new Error("path 파라미터가 필요합니다.");
+    }
+
+    try {
+      const entries = await fs.readdir(dirPath, { withFileTypes: true });
+      const result = entries.map((entry) => {
+        const type = entry.isDirectory() ? "[DIR]" : "[FILE]";
+        return `${type} ${entry.name}`;
+      });
+      return result.join("\n");
+    } catch (err) {
+      throw new Error(`디렉토리 조회 실패: ${dirPath} - ${err}`);
+    }
+  },
+};
+
+/**
+ * 모든 파일 도구 목록
+ */
+export const fileTools: ITool[] = [readFileTool, writeFileTool, listDirTool];

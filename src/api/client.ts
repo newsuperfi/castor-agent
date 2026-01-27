@@ -30,12 +30,49 @@ export function createApiClient(
 
   const refreshMutex = new Mutex();
 
-  // 요청 인터셉터: 토큰 주입
+  // 요청 인터셉터: 토큰 주입 (만료 시 자동 리프레시)
   client.interceptors.request.use(async (config) => {
-    const token = await getToken();
+    let token = await getToken();
+
+    console.log("[Castor/Client] Token status:", token ? "found" : "null");
 
     if (token) {
+      const now = Date.now();
+      const expiresAt = token.expiresAt || 0;
+      // 5분 여유를 두고 만료 체크 (만료 5분 전에 미리 리프레시)
+      const isExpired = expiresAt > 0 && now > expiresAt - 5 * 60 * 1000;
+
+      console.log(
+        "[Castor/Client] Token expires at:",
+        new Date(expiresAt).toISOString(),
+      );
+      console.log("[Castor/Client] Current time:", new Date(now).toISOString());
+      console.log("[Castor/Client] Token expired/expiring soon?:", isExpired);
+
+      // 만료되었거나 곧 만료될 예정이면 리프레시
+      if (isExpired) {
+        console.log("[Castor/Client] Token expired, refreshing...");
+        const newToken = await refreshToken();
+        if (newToken) {
+          token = newToken;
+          console.log("[Castor/Client] Token refreshed successfully!");
+          console.log(
+            "[Castor/Client] New token expires at:",
+            new Date(newToken.expiresAt || 0).toISOString(),
+          );
+        } else {
+          console.log("[Castor/Client] WARNING: Token refresh failed!");
+        }
+      }
+
+      console.log(
+        "[Castor/Client] Access token (first 20 chars):",
+        token.accessToken?.substring(0, 20),
+      );
       config.headers.Authorization = `Bearer ${token.accessToken}`;
+      console.log("[Castor/Client] Authorization header set");
+    } else {
+      console.log("[Castor/Client] WARNING: No token available!");
     }
 
     return config;
@@ -88,4 +125,52 @@ export function createApiClient(
   );
 
   return client;
+}
+
+/**
+ * Antigravity API 클라이언트 생성
+ */
+export async function createAntigravityClient(
+  context: import("vscode").ExtensionContext,
+): Promise<AxiosInstance> {
+  const { getActiveAccount, setActiveAccount, getAllAccounts } =
+    await import("../auth/secretStorage.js");
+
+  return createApiClient(
+    "https://cloudcode-pa.googleapis.com",
+    async () => {
+      const account = await getActiveAccount(context);
+      if (!account) return null;
+      return {
+        accessToken: account.accessToken,
+        refreshToken: account.refreshToken,
+        expiresAt: account.expiresAt || 0,
+      };
+    },
+    async () => {
+      // refreshAccessToken을 사용하여 토큰 리프레시
+      const { refreshAccessToken } = await import("../auth/antigravity.js");
+      const newAccessToken = await refreshAccessToken(context);
+      if (newAccessToken) {
+        // 리프레시 후 새 토큰 정보 반환
+        const account = await getActiveAccount(context);
+        if (account) {
+          return {
+            accessToken: account.accessToken,
+            refreshToken: account.refreshToken,
+            expiresAt: account.expiresAt || 0,
+          };
+        }
+      }
+      return null;
+    },
+    async () => {
+      // 계정 로테이션: 다음 계정으로 전환
+      const { accounts, activeIndex } = await getAllAccounts(context);
+      if (accounts.length <= 1) return false;
+      const nextIndex = (activeIndex + 1) % accounts.length;
+      await setActiveAccount(context, nextIndex);
+      return true;
+    },
+  );
 }

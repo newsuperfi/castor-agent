@@ -112,6 +112,7 @@ export type RiskLevel = "SAFE" | "MODERATE" | "HIGH";
 
 // Webview 메시지 타입
 export type WebviewMessageType =
+  | "debug"
   | "sendMessage"
   | "receiveMessage"
   | "streamChunk"

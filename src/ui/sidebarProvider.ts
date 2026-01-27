@@ -1,4 +1,6 @@
 import * as vscode from "vscode";
+import { AgentBrain } from "../agent/brain.js";
+import { createAntigravityClient } from "../api/client.js";
 import {
   deleteAccount,
   getLoginStatus,
@@ -6,6 +8,8 @@ import {
   logout,
   switchAccount,
 } from "../auth/antigravity.js";
+import { AntigravityProvider } from "../providers/antigravity.js";
+import { registerAllTools, toolRegistry } from "../tools/index.js";
 import type {
   AIModel,
   ChatMessage,
@@ -19,17 +23,22 @@ import type {
 export class SidebarProvider implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView;
   private messages: ChatMessage[] = [];
+  private agentBrain?: AgentBrain;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly context: vscode.ExtensionContext,
-  ) {}
+  ) {
+    // 도구 등록
+    registerAllTools();
+  }
 
   resolveWebviewView(
     webviewView: vscode.WebviewView,
     _context: vscode.WebviewViewResolveContext,
     _token: vscode.CancellationToken,
   ): void {
+    console.log("[Castor] resolveWebviewView called!");
     this._view = webviewView;
 
     webviewView.webview.options = {
@@ -138,8 +147,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
    * Webview 메시지 처리
    */
   private async handleMessage(message: WebviewMessage): Promise<void> {
+    console.log("[Castor] handleMessage received:", message.type);
+
     switch (message.type) {
+      case "debug":
+        console.log("[Castor/Debug]", message.payload);
+        break;
+
       case "sendMessage":
+        console.log("[Castor] Routing to handleSendMessage");
         await this.handleSendMessage(message.payload as { content: string });
         break;
 
@@ -183,7 +199,19 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   /**
    * 메시지 전송 처리
    */
-  private async handleSendMessage(payload: { content: string }): Promise<void> {
+  private async handleSendMessage(payload: {
+    content: string;
+    model?: AIModel;
+    mode?: "edit" | "plan";
+  }): Promise<void> {
+    vscode.window.showInformationMessage(
+      `[Castor] handleSendMessage: ${payload.content.substring(0, 30)}`,
+    );
+    console.log(
+      "[Castor] handleSendMessage called with:",
+      payload.content.substring(0, 50),
+    );
+
     const userMessage: ChatMessage = {
       id: crypto.randomUUID(),
       role: "user",
@@ -192,14 +220,177 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     };
 
     this.messages.push(userMessage);
+    // 사용자 메시지는 webview에서 이미 표시하므로 여기서 보내지 않음
 
-    // TODO: AI 응답 생성 (Agent 모듈 연동)
+    // 로그인 상태 확인
+    console.log("[Castor] Checking login status...");
+    const status = await getLoginStatus(this.context);
+    console.log(
+      "[Castor] Login status:",
+      status.isLoggedIn,
+      status.accounts?.length || 0,
+      "accounts",
+    );
+
+    if (!status.isLoggedIn) {
+      console.log("[Castor] Not logged in, returning error");
+      const errorMessage: ChatMessage = {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: "⚠️ 로그인이 필요합니다. 설정에서 로그인해주세요.",
+        timestamp: Date.now(),
+      };
+      this.messages.push(errorMessage);
+      this.postMessage({ type: "receiveMessage", payload: errorMessage });
+      return;
+    }
+
+    // AI 응답 생성
     const assistantMessage: ChatMessage = {
       id: crypto.randomUUID(),
       role: "assistant",
-      content: `메시지를 받았습니다: "${payload.content}"\n\n아직 AI 연동이 완료되지 않았습니다. Phase 2에서 완성될 예정입니다.`,
+      content: "",
       timestamp: Date.now(),
+      toolCalls: [],
     };
+
+    try {
+      // AgentBrain 초기화 (필요 시)
+      if (!this.agentBrain) {
+        vscode.window.showInformationMessage("[Castor] Creating AgentBrain...");
+
+        // 로그인 상태 확인
+        const { getActiveAccount } = await import("../auth/secretStorage.js");
+        const account = await getActiveAccount(this.context);
+        if (!account) {
+          throw new Error(
+            "로그인이 필요합니다. 먼저 Antigravity 계정으로 로그인해주세요.",
+          );
+        }
+        vscode.window.showInformationMessage(
+          `[Castor] Logged in as: ${account.email}`,
+        );
+
+        const client = await createAntigravityClient(this.context);
+        const provider = new AntigravityProvider(client);
+        this.agentBrain = new AgentBrain(provider, {
+          mode: payload.mode || "edit",
+        });
+
+        // 도구 등록
+        for (const tool of toolRegistry.getAll()) {
+          this.agentBrain.registerTool(
+            {
+              name: tool.name,
+              description: tool.description,
+              parameters: tool.parameters,
+            },
+            (args) => tool.execute(args),
+          );
+        }
+        vscode.window.showInformationMessage("[Castor] AgentBrain created!");
+      }
+
+      // 스트리밍 응답 처리
+      const options = {
+        model: payload.model || ("gemini-3-flash-preview" as AIModel),
+        thinkingLevel: "HIGH" as const,
+      };
+
+      vscode.window.showInformationMessage(
+        `[Castor] Starting run() with model: ${options.model}`,
+      );
+
+      let eventCount = 0;
+
+      // 타임아웃 설정 (30초)
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error("API 응답 타임아웃 (30초)")), 30000);
+      });
+
+      try {
+        const runGenerator = this.agentBrain.run(this.messages, options);
+
+        for await (const event of runGenerator) {
+          eventCount++;
+          vscode.window.showInformationMessage(
+            `[Castor] Event #${eventCount}: ${event.type}`,
+          );
+
+          switch (event.type) {
+            case "thinking":
+              assistantMessage.thinking =
+                (assistantMessage.thinking || "") + event.content;
+              this.postMessage({
+                type: "streamChunk",
+                payload: { type: "thinking", content: event.content },
+              });
+              break;
+
+            case "text":
+              assistantMessage.content += event.content;
+              this.postMessage({
+                type: "streamChunk",
+                payload: { type: "text", content: event.content },
+              });
+              break;
+
+            case "tool_start":
+              if (event.toolCall) {
+                assistantMessage.toolCalls?.push(event.toolCall);
+                this.postMessage({
+                  type: "streamChunk",
+                  payload: { type: "tool_start", toolCall: event.toolCall },
+                });
+              }
+              break;
+
+            case "tool_end":
+              if (event.toolCall) {
+                const idx = assistantMessage.toolCalls?.findIndex(
+                  (tc) => tc.id === event.toolCall?.id,
+                );
+                if (
+                  idx !== undefined &&
+                  idx >= 0 &&
+                  assistantMessage.toolCalls
+                ) {
+                  assistantMessage.toolCalls[idx] = event.toolCall;
+                }
+                this.postMessage({
+                  type: "streamChunk",
+                  payload: { type: "tool_end", toolCall: event.toolCall },
+                });
+              }
+              break;
+
+            case "error":
+              vscode.window.showErrorMessage(
+                `[Castor] Agent error: ${event.error?.message}`,
+              );
+              assistantMessage.content += `\n\n⚠️ 오류: ${event.error?.message || "알 수 없는 오류"}`;
+              break;
+          }
+        }
+      } catch (timeoutError) {
+        throw timeoutError;
+      }
+
+      vscode.window.showInformationMessage(
+        `[Castor] Finished! Events: ${eventCount}`,
+      );
+
+      // 응답이 비어있으면 fallback 메시지
+      if (!assistantMessage.content.trim()) {
+        assistantMessage.content =
+          "⚠️ AI 응답을 받지 못했습니다. 잠시 후 다시 시도해주세요.";
+      }
+    } catch (error) {
+      console.error("[Castor] handleSendMessage error:", error);
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      vscode.window.showErrorMessage(`[Castor] Error: ${errorMsg}`);
+      assistantMessage.content = `⚠️ 오류가 발생했습니다: ${errorMsg}`;
+    }
 
     this.messages.push(assistantMessage);
     this.postMessage({ type: "receiveMessage", payload: assistantMessage });
@@ -284,6 +475,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     );
 
     const nonce = this.getNonce();
+    // 개발 모드에서만 cache busting 적용
+    const isDev =
+      this.context.extensionMode === vscode.ExtensionMode.Development;
+    const cacheBuster = isDev ? `?v=${Date.now()}` : "";
 
     return `<!DOCTYPE html>
 <html lang="ko">
@@ -291,12 +486,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
-  <link href="${styleUri}" rel="stylesheet">
+  <link href="${styleUri}${cacheBuster}" rel="stylesheet">
   <title>Castor Agent</title>
 </head>
 <body>
   <div id="root"></div>
-  <script nonce="${nonce}" src="${scriptUri}"></script>
+  <script nonce="${nonce}" src="${scriptUri}${cacheBuster}"></script>
 </body>
 </html>`;
   }

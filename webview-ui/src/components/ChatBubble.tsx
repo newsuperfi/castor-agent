@@ -47,6 +47,42 @@ export function ChatBubble({ message }: ChatBubbleProps) {
           {formatMessage(message.content)}
         </div>
 
+        {/* 도구 실행 결과 (접기/펴기) */}
+        {message.toolCalls && message.toolCalls.length > 0 && (
+          <div className="space-y-2 mt-2">
+            {message.toolCalls.map((tc) => (
+              <details
+                key={tc.id}
+                className="text-xs border border-vscode-border rounded overflow-hidden"
+              >
+                <summary
+                  className={`cursor-pointer px-3 py-2 hover:bg-vscode-hover flex items-center gap-2 ${
+                    tc.status === "completed"
+                      ? "text-green-400"
+                      : tc.status === "error"
+                        ? "text-red-400"
+                        : "text-yellow-400"
+                  }`}
+                >
+                  <span className="font-mono">{tc.name}</span>
+                  <span className="opacity-50">
+                    {tc.status === "completed"
+                      ? "✓"
+                      : tc.status === "error"
+                        ? "✗"
+                        : "⋯"}
+                  </span>
+                </summary>
+                {tc.result && (
+                  <pre className="px-3 py-2 bg-black/20 whitespace-pre-wrap overflow-x-auto max-h-48 overflow-y-auto">
+                    {tc.result}
+                  </pre>
+                )}
+              </details>
+            ))}
+          </div>
+        )}
+
         {/* 토큰 사용량 */}
         {message.tokenUsage && (
           <div className="text-xs opacity-50 flex gap-2">

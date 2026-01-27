@@ -10,6 +10,15 @@ declare const acquireVsCodeApi: () => {
   setState: (state: unknown) => void;
 };
 
+// 도구 호출 타입
+interface ToolCall {
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+  result?: string;
+  status: "pending" | "running" | "completed" | "error";
+}
+
 // 메시지 타입
 interface ChatMessage {
   id: string;
@@ -17,6 +26,7 @@ interface ChatMessage {
   content: string;
   timestamp: number;
   thinking?: string;
+  toolCalls?: ToolCall[];
   tokenUsage?: {
     inputTokens: number;
     outputTokens: number;

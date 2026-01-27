@@ -147,7 +147,7 @@ export function ChatInputBar({ onSend, disabled }: ChatInputBarProps) {
               toggleModelPicker();
             }
           }}
-          className="absolute bottom-full left-0 right-0 mb-2 mx-4 bg-vscode-input border border-vscode-border rounded-lg shadow-xl max-h-64 overflow-y-auto z-10 outline-none"
+          className="absolute bottom-full left-0 right-0 mb-2 mx-4 bg-vscode-input border border-vscode-border rounded-lg shadow-xl max-h-[80vh] overflow-y-auto z-10 outline-none"
         >
           <div className="p-2">
             <div className="text-xs opacity-50 px-2 py-1">Antigravity</div>
