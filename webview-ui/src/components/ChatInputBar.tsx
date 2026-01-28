@@ -46,17 +46,25 @@ const MODELS: ModelConfig[] = [
     value: "gemini-2.5-flash",
     label: "Gemini 2.5 Flash",
     category: "gemini-cli",
+    hasThinking: true,
   },
-  { value: "gemini-2.5-pro", label: "Gemini 2.5 Pro", category: "gemini-cli" },
+  {
+    value: "gemini-2.5-pro",
+    label: "Gemini 2.5 Pro",
+    category: "gemini-cli",
+    hasThinking: true,
+  },
   {
     value: "gemini-3-flash-preview",
     label: "Gemini 3 Flash Preview",
     category: "gemini-cli",
+    hasThinking: true,
   },
   {
     value: "gemini-3-pro-preview",
     label: "Gemini 3 Pro Preview",
     category: "gemini-cli",
+    hasThinking: true,
   },
 ];
 

@@ -27,14 +27,18 @@
     "viewsContainers": {
       "activitybar": [
         {
-          "id": "castor-sidebar",
+          "id": "castor-panel",
           "title": "Castor Agent",
           "icon": "assets/icon.svg"
         }
       ]
     },
     "views": {
-      "castor-sidebar": [
+      "castor-panel": [
+        {
+          "id": "castor-actions",
+          "name": "Actions"
+        },
         {
           "type": "webview",
           "id": "castor.chatView",

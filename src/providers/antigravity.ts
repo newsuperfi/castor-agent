@@ -8,28 +8,102 @@ import type {
   ToolDef,
 } from "../types.js";
 import { isClaudeModel, isGemini3Model } from "./base.js";
-
-const ANTIGRAVITY_API_BASE = "https://antigravity.googleapis.com/v1";
+import {
+  ANTIGRAVITY_ENDPOINT_FALLBACKS,
+  API_PATH,
+  DEFAULT_PROJECT_ID,
+  getRandomizedHeaders,
+  THINKING_BUDGET,
+} from "./constants.js";
 
 // 프로젝트 ID 캐시
 let cachedProjectId: string | null = null;
 
 /**
+ * onboardUser API를 호출하여 새 프로젝트를 자동 생성
+ * PR #205: 2026-01-15부터 유효한 프로젝트 ID가 필수
+ */
+async function onboardManagedProject(
+  client: AxiosInstance,
+  tierId: string = "FREE",
+  attempts: number = 5,
+  delayMs: number = 3000,
+): Promise<string | undefined> {
+  const metadata = {
+    ideType: "IDE_UNSPECIFIED",
+    platform: "PLATFORM_UNSPECIFIED",
+    pluginType: "GEMINI",
+  };
+
+  const headers = getRandomizedHeaders("antigravity");
+
+  for (const endpoint of ANTIGRAVITY_ENDPOINT_FALLBACKS) {
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      try {
+        console.log(
+          `[Castor/Provider] onboardUser attempt ${attempt + 1}/${attempts} at:`,
+          endpoint,
+        );
+
+        const response = await client.post(
+          `${endpoint}${API_PATH.ONBOARD_USER}`,
+          { tierId, metadata },
+          {
+            headers: {
+              "Content-Type": "application/json",
+              ...headers,
+            },
+          },
+        );
+
+        const payload = response.data;
+        console.log(
+          "[Castor/Provider] onboardUser response:",
+          JSON.stringify(payload, null, 2),
+        );
+
+        // 프로비저닝 완료 확인
+        const managedProjectId = payload?.response?.cloudaicompanionProject?.id;
+        if (payload?.done && managedProjectId) {
+          console.log(
+            "[Castor/Provider] Successfully provisioned project:",
+            managedProjectId,
+          );
+          return managedProjectId;
+        }
+
+        // 아직 완료되지 않았으면 대기 후 재시도
+        if (!payload?.done) {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          continue;
+        }
+      } catch (error) {
+        console.log(
+          "[Castor/Provider] onboardUser failed at",
+          endpoint,
+          ":",
+          error,
+        );
+        break; // 다음 엔드포인트 시도
+      }
+    }
+  }
+
+  return undefined;
+}
+
+/**
  * loadCodeAssist API를 호출하여 사용자의 managed project ID를 가져옴
+ * 없으면 onboardUser로 자동 프로비저닝 시도 (PR #205)
  */
 async function loadManagedProjectId(client: AxiosInstance): Promise<string> {
-  const DEFAULT_PROJECT_ID = "rising-fact-p41fc";
-
   if (cachedProjectId) {
     console.log("[Castor/Provider] Using cached project ID:", cachedProjectId);
     return cachedProjectId;
   }
 
-  const endpoints = [
-    "https://cloudcode-pa.googleapis.com",
-    "https://daily-cloudcode-pa.sandbox.googleapis.com",
-    "https://autopush-cloudcode-pa.sandbox.googleapis.com",
-  ];
+  // Production 우선 폴백 순서 사용
+  const endpoints = ANTIGRAVITY_ENDPOINT_FALLBACKS;
 
   const metadata = {
     ideType: "IDE_UNSPECIFIED",
@@ -37,19 +111,22 @@ async function loadManagedProjectId(client: AxiosInstance): Promise<string> {
     pluginType: "GEMINI",
   };
 
+  let allowedTiers: Array<{ id?: string; isDefault?: boolean }> = [];
+
   for (const endpoint of endpoints) {
     try {
       console.log("[Castor/Provider] Trying loadCodeAssist at:", endpoint);
 
+      // 랜덤화된 헤더 사용
+      const headers = getRandomizedHeaders("antigravity");
+
       const response = await client.post(
-        `${endpoint}/v1internal:loadCodeAssist`,
+        `${endpoint}${API_PATH.LOAD_CODE_ASSIST}`,
         { metadata },
         {
           headers: {
             "Content-Type": "application/json",
-            "User-Agent": "google-api-nodejs-client/9.15.1",
-            "X-Goog-Api-Client": "google-cloud-sdk vscode_cloudshelleditor/0.1",
-            "Client-Metadata": JSON.stringify(metadata),
+            ...headers,
           },
         },
       );
@@ -59,6 +136,11 @@ async function loadManagedProjectId(client: AxiosInstance): Promise<string> {
         "[Castor/Provider] loadCodeAssist response:",
         JSON.stringify(payload, null, 2),
       );
+
+      // allowedTiers 저장 (onboarding에 필요)
+      if (payload?.allowedTiers) {
+        allowedTiers = payload.allowedTiers;
+      }
 
       // cloudaicompanionProject에서 프로젝트 ID 추출
       let projectId: string | undefined;
@@ -83,8 +165,23 @@ async function loadManagedProjectId(client: AxiosInstance): Promise<string> {
     }
   }
 
+  // 프로젝트 ID가 없으면 자동 프로비저닝 시도 (PR #205)
   console.log(
-    "[Castor/Provider] Using fallback project ID:",
+    "[Castor/Provider] No project found, attempting auto-provision...",
+  );
+
+  // 기본 tier ID 선택
+  const defaultTier = allowedTiers.find((t) => t.isDefault) || allowedTiers[0];
+  const tierId = defaultTier?.id || "FREE";
+
+  const provisionedId = await onboardManagedProject(client, tierId);
+  if (provisionedId) {
+    cachedProjectId = provisionedId;
+    return provisionedId;
+  }
+
+  console.log(
+    "[Castor/Provider] Auto-provision failed, using fallback:",
     DEFAULT_PROJECT_ID,
   );
   return DEFAULT_PROJECT_ID;
@@ -110,14 +207,19 @@ export class AntigravityProvider implements IAIProvider {
     console.log("[Castor/Provider] messages count:", messages.length);
 
     try {
-      // 모델 이름 매핑: antigravity-* 형식을 Antigravity API 모델 ID로 변환
-      // Ref: https://github.com/NoeFabris/opencode-antigravity-auth/docs/ANTIGRAVITY_API_SPEC.md
+      // 모델 이름 매핑: UI 모델명을 Gemini-CLI API 모델 ID로 변환
+      // Ref: https://github.com/google-gemini/gemini-cli/packages/core/src/config/models.ts
       const MODEL_MAP: Record<string, string> = {
-        "antigravity-gemini-3-flash": "gemini-3-pro-low",
-        "antigravity-gemini-3-pro": "gemini-3-pro-high",
-        "antigravity-claude-sonnet-4-5": "claude-sonnet-4-5",
-        "antigravity-claude-sonnet-4-5-thinking": "claude-sonnet-4-5-thinking",
-        "antigravity-claude-opus-4-5-thinking": "claude-opus-4-5-thinking",
+        // Gemini 3 모델 (gemini-cli 공식 모델 ID)
+        "gemini-3-flash-preview": "gemini-3-flash-preview",
+        "gemini-3-pro-preview": "gemini-3-pro-preview",
+        // Claude 모델 (레거시 매핑 유지)
+        "claude-sonnet-4.5": "claude-sonnet-4-5",
+        "claude-opus-4.5": "claude-opus-4-5-thinking",
+        // Gemini 2.5 모델 (직접 전달)
+        "gemini-2.5-pro": "gemini-2.5-pro",
+        "gemini-2.5-flash": "gemini-2.5-flash",
+        "gemini-2.5-flash-lite": "gemini-2.5-flash-lite",
       };
       const apiModel = MODEL_MAP[model] || model;
 
@@ -128,8 +230,8 @@ export class AntigravityProvider implements IAIProvider {
         apiModel,
       );
 
-      // Antigravity API 엔드포인트: /v1internal:streamGenerateContent?alt=sse
-      const endpoint = `/v1internal:streamGenerateContent?alt=sse`;
+      // 스트리밍 엔드포인트 (비스트리밍: API_PATH.GENERATE - 미구현)
+      const endpoint = API_PATH.STREAM_GENERATE;
       console.log("[Castor/Provider] API endpoint:", endpoint);
       console.log("[Castor/Provider] API model:", apiModel);
       console.log(
@@ -137,16 +239,12 @@ export class AntigravityProvider implements IAIProvider {
         JSON.stringify(requestBody).substring(0, 500),
       );
 
+      // gemini-cli 스타일: 최소한의 헤더만 사용
+      // Ref: https://github.com/google-gemini/gemini-cli/packages/core/src/code_assist/server.ts
       const response = await this.client.post(endpoint, requestBody, {
         responseType: "stream",
         headers: {
           "Content-Type": "application/json",
-          // gemini-cli 스타일 헤더 (prod 엔드포인트용)
-          "User-Agent": "google-api-nodejs-client/9.15.1",
-          "X-Goog-Api-Client": "gl-node/22.17.0",
-          "Client-Metadata":
-            "ideType=IDE_UNSPECIFIED,platform=PLATFORM_UNSPECIFIED,pluginType=GEMINI",
-          Accept: "text/event-stream",
         },
       });
 
@@ -263,7 +361,8 @@ export class AntigravityProvider implements IAIProvider {
   }
 
   /**
-   * 요청 본문 생성
+   * 요청 본문 생성 (gemini-cli 공식 구조와 동일)
+   * Ref: https://github.com/google-gemini/gemini-cli/packages/core/src/code_assist/converter.ts
    */
   private async buildRequestBody(
     messages: ChatMessage[],
@@ -282,22 +381,40 @@ export class AntigravityProvider implements IAIProvider {
       topK: 64,
     };
 
-    // 사고 설정
-    if (isGemini3Model(options.model) || isClaudeModel(options.model)) {
+    // 사고 설정 (gemini-cli 스타일)
+    if (isGemini3Model(options.model)) {
+      // Gemini 3: thinkingLevel 사용 (대문자 유지 - gemini-cli 공식)
+      // Ref: defaultModelConfigs.ts - ThinkingLevel.HIGH
       generationConfig.thinkingConfig = {
         includeThoughts: true,
         thinkingLevel: options.thinkingLevel || "HIGH",
       };
+    } else if (isClaudeModel(options.model)) {
+      // Claude: snake_case 및 thinking_budget 사용
+      generationConfig.thinkingConfig = {
+        include_thoughts: true,
+        thinking_budget: options.thinkingBudget || THINKING_BUDGET.DEFAULT,
+      };
     } else if (options.model.startsWith("gemini-2.5")) {
+      // Gemini 2.5: thinkingBudget 사용
       generationConfig.thinkingConfig = {
         includeThoughts: true,
-        thinkingBudget: options.thinkingBudget || 8192,
+        thinkingBudget: options.thinkingBudget || THINKING_BUDGET.DEFAULT,
       };
     }
 
+    // 동적으로 사용자의 managed project ID 가져오기
+    const projectId = await loadManagedProjectId(this.client);
+
+    // 세션 ID: gemini-cli에서는 빈 문자열로 초기화
+    // Ref: CodeAssistServer constructor in server.ts
+    const sessionId = "";
+
+    // gemini-cli 공식 구조: request 내부에 session_id 포함
     const request: Record<string, unknown> = {
       contents,
       generationConfig,
+      session_id: sessionId,
     };
 
     // TODO: Gemini 3 모델에서 tools 형식 문제 해결 필요
@@ -307,30 +424,29 @@ export class AntigravityProvider implements IAIProvider {
     //   request.tools = [...];
     // }
 
-    // 동적으로 사용자의 managed project ID 가져오기
-    const projectId = await loadManagedProjectId(this.client);
-
-    // Antigravity API 요청 구조
-    // Ref: https://github.com/NoeFabris/opencode-antigravity-auth/docs/ANTIGRAVITY_API_SPEC.md
+    // gemini-cli 공식 구조와 동일
+    // Ref: CAGenerateContentRequest in converter.ts
     return {
-      project: projectId,
       model: apiModel,
+      project: projectId,
+      user_prompt_id: crypto.randomUUID(),
       request,
-      userAgent: "antigravity",
-      requestId: crypto.randomUUID(),
     };
   }
 
   /**
    * 응답 청크 파싱
+   * gemini-cli 응답 구조: { response: { candidates: [...] }, traceId: "..." }
    */
   private *parseChunk(data: Record<string, unknown>): Generator<StreamChunk> {
-    const candidates = data.candidates as
+    // gemini-cli 응답은 response 래퍼를 가짐
+    const response = data.response as Record<string, unknown> | undefined;
+    const candidates = (response?.candidates || data.candidates) as
       | Array<{
           content?: {
             parts?: Array<{
               text?: string;
-              thought?: string;
+              thought?: boolean;
               functionCall?: {
                 name: string;
                 args: Record<string, unknown>;
@@ -345,11 +461,11 @@ export class AntigravityProvider implements IAIProvider {
     }
 
     for (const part of candidates[0].content.parts) {
-      if (part.thought) {
-        yield { type: "thinking", content: part.thought };
-      }
-
-      if (part.text) {
+      // gemini-cli 응답: thought=true이면 text가 thinking 내용
+      // thought=false 또는 없으면 text가 일반 응답
+      if (part.thought && part.text) {
+        yield { type: "thinking", content: part.text };
+      } else if (part.text) {
         yield { type: "text", content: part.text };
       }
 

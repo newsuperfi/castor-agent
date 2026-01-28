@@ -2,10 +2,44 @@ import * as vscode from "vscode";
 import { SidebarProvider } from "./ui/sidebarProvider.js";
 
 /**
+ * Placeholder TreeDataProvider - Hybrid Sidebar Pattern용
+ * VS Code가 사이드바 컨테이너를 안정적으로 인식하도록 함
+ */
+class ActionsTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem> {
+  getTreeItem(element: vscode.TreeItem): vscode.TreeItem {
+    return element;
+  }
+
+  getChildren(): Thenable<vscode.TreeItem[]> {
+    // 빈 트리 반환 (Chat Webview가 주 UI)
+    return Promise.resolve([]);
+  }
+}
+
+/**
  * Castor Agent Extension 활성화
  */
 export function activate(context: vscode.ExtensionContext): void {
   console.log("Castor Agent 활성화됨");
+
+  // Antigravity Cockpit 계정 자동 import (429 회피용)
+  import("./auth/cockpitImport.js")
+    .then(({ importCockpitAccounts }) => {
+      importCockpitAccounts(context).then((count) => {
+        if (count > 0) {
+          console.log(`[Castor] Imported ${count} Cockpit accounts`);
+        }
+      });
+    })
+    .catch((err) => console.error("[Castor] Failed to import Cockpit:", err));
+
+  // Hybrid Sidebar Pattern: TreeView를 먼저 등록하여 컨테이너 안정화
+  context.subscriptions.push(
+    vscode.window.registerTreeDataProvider(
+      "castor-actions",
+      new ActionsTreeProvider(),
+    ),
+  );
 
   // Sidebar Webview Provider 등록
   const sidebarProvider = new SidebarProvider(context.extensionUri, context);

@@ -1,23 +1,36 @@
 /**
- * Antigravity OAuth 상수
- * opencode-antigravity-auth 및 Antigravity-Manager 프로젝트에서 차용
+ * OAuth 상수
+ * Gemini-CLI 공식 OAuth 사용 (google-gemini/gemini-cli)
+ * Ref: https://github.com/google-gemini/gemini-cli/packages/core/src/code_assist/oauth2.ts
  */
 
-// OAuth 클라이언트 설정
+// ============================================================================
+// Gemini-CLI 공식 OAuth 설정 (현재 사용)
+// ============================================================================
 export const ANTIGRAVITY_CLIENT_ID =
-  "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
-export const ANTIGRAVITY_CLIENT_SECRET = "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";
+  "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com";
+export const ANTIGRAVITY_CLIENT_SECRET = "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";
 
-// OAuth 스코프
 export const ANTIGRAVITY_SCOPES: readonly string[] = [
   "https://www.googleapis.com/auth/cloud-platform",
   "https://www.googleapis.com/auth/userinfo.email",
   "https://www.googleapis.com/auth/userinfo.profile",
-  "https://www.googleapis.com/auth/cclog",
-  "https://www.googleapis.com/auth/experimentsandconfigs",
 ];
 
-// OAuth URLs
+// ============================================================================
+// Antigravity OAuth 설정 (레거시 - 주석 처리)
+// ============================================================================
+// export const ANTIGRAVITY_CLIENT_ID =
+//   "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
+// export const ANTIGRAVITY_CLIENT_SECRET = "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";
+//
+// export const ANTIGRAVITY_SCOPES: readonly string[] = [
+//   "https://www.googleapis.com/auth/cloud-platform",
+//   "https://www.googleapis.com/auth/userinfo.email",
+//   "https://www.googleapis.com/auth/userinfo.profile",
+//   "https://www.googleapis.com/auth/cclog",
+//   "https://www.googleapis.com/auth/experimentsandconfigs",
+// ];
 export const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 export const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 export const GOOGLE_USERINFO_URL =

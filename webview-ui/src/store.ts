@@ -103,10 +103,16 @@ interface AppState {
 
 // 모델별 지원 thinking level
 const MODEL_THINKING_LEVELS: Record<string, ThinkingLevel[]> = {
+  // Antigravity 모델
   "antigravity-gemini-3-pro": ["low", "high"],
   "antigravity-gemini-3-flash": ["minimal", "low", "medium", "high"],
   "antigravity-claude-sonnet-4-5-thinking": ["low", "high"],
   "antigravity-claude-opus-4-5-thinking": ["low", "high"],
+  // Gemini-CLI 모델 (preview)
+  "gemini-3-pro-preview": ["low", "medium", "high"],
+  "gemini-3-flash-preview": ["low", "medium", "high"],
+  "gemini-2.5-pro": ["low", "medium", "high"],
+  "gemini-2.5-flash": ["low", "medium", "high"],
 };
 
 // VS Code API 인스턴스

@@ -8,17 +8,20 @@ import type { AuthToken } from "../types.js";
 
 interface ExtendedAxiosRequestConfig extends InternalAxiosRequestConfig {
   _retry?: boolean;
+  _retryCount?: number; // 재시도 횟수 추적
 }
 
 /**
  * API 클라이언트 생성기
  * 401 자동 리프레시 및 동시성 제어 포함
+ * 429 발생 시 모든 계정을 순회하며 재시도
  */
 export function createApiClient(
   baseURL: string,
   getToken: () => Promise<AuthToken | null>,
   refreshToken: () => Promise<AuthToken | null>,
   onRateLimited?: () => Promise<boolean>,
+  getTotalAccounts?: () => Promise<number>, // 전체 계정 수 조회
 ): AxiosInstance {
   const client = axios.create({
     baseURL,
@@ -107,17 +110,32 @@ export function createApiClient(
         });
       }
 
-      // 429 Too Many Requests: 계정 로테이션
+      // 429 Too Many Requests: 모든 계정 순회하며 재시도
       if (error.response?.status === 429 && onRateLimited) {
-        const rotated = await onRateLimited();
+        const retryCount = originalRequest._retryCount || 0;
+        const maxRetries = getTotalAccounts ? await getTotalAccounts() : 1;
 
-        if (rotated && !originalRequest._retry) {
-          originalRequest._retry = true;
+        console.log(
+          `[Castor/Client] 429 Rate Limited! Retry ${retryCount + 1}/${maxRetries}`,
+        );
 
-          // 잠시 대기 후 재시도
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-          return client(originalRequest);
+        if (retryCount < maxRetries) {
+          const rotated = await onRateLimited();
+
+          if (rotated) {
+            originalRequest._retryCount = retryCount + 1;
+
+            console.log(`[Castor/Client] Rotated to next account, retrying...`);
+
+            // 잠시 대기 후 재시도 (500ms)
+            await new Promise((resolve) => setTimeout(resolve, 500));
+            return client(originalRequest);
+          }
         }
+
+        console.log(
+          `[Castor/Client] All ${maxRetries} accounts exhausted, giving up.`,
+        );
       }
 
       return Promise.reject(error);
@@ -129,6 +147,7 @@ export function createApiClient(
 
 /**
  * Antigravity API 클라이언트 생성
+ * 429 발생 시 모든 등록된 계정을 순회하며 재시도
  */
 export async function createAntigravityClient(
   context: import("vscode").ExtensionContext,
@@ -169,8 +188,16 @@ export async function createAntigravityClient(
       const { accounts, activeIndex } = await getAllAccounts(context);
       if (accounts.length <= 1) return false;
       const nextIndex = (activeIndex + 1) % accounts.length;
+      console.log(
+        `[Castor/Client] Rotating account: ${activeIndex} -> ${nextIndex} (${accounts[nextIndex]?.email})`,
+      );
       await setActiveAccount(context, nextIndex);
       return true;
+    },
+    async () => {
+      // 전체 계정 수 반환
+      const { accounts } = await getAllAccounts(context);
+      return accounts.length;
     },
   );
 }
