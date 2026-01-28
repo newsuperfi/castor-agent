@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ChatBubble } from "./components/ChatBubble";
 import { ChatInputBar } from "./components/ChatInputBar";
-import { HeaderBar } from "./components/HeaderBar";
+import { SessionList } from "./components/SessionList";
 import { SettingsPage } from "./components/SettingsPage";
 import { ThinkingAccordion } from "./components/ThinkingAccordion";
 import { t } from "./i18n";
@@ -16,8 +16,10 @@ export default function App() {
     isStreaming,
     currentThinking,
     isLoggedIn,
+    currentSessionTitle,
     sendMessage,
     login,
+    toggleSessionList,
   } = useStore();
 
   // 메시지 추가 시 스크롤
@@ -60,8 +62,31 @@ export default function App() {
 
   return (
     <div className="flex flex-col h-screen relative">
-      {/* 헤더 - 간소화된 상태 표시 + 설정 버튼 */}
-      <HeaderBar onSettingsClick={() => setShowSettings(true)} />
+      {/* 세션 목록 오버레이 */}
+      <SessionList />
+
+      {/* 헤더 - 세션 제목 + 설정 버튼 */}
+      <div className="sticky top-0 z-10 bg-vscode-bg border-b border-vscode-border px-4 py-2">
+        <div className="flex items-center justify-between text-xs">
+          <button
+            onClick={toggleSessionList}
+            className="flex items-center gap-2 opacity-80 hover:opacity-100"
+            title="대화 목록"
+          >
+            <span className="text-lg">☰</span>
+            <span className="font-medium truncate max-w-[180px]">
+              {currentSessionTitle}
+            </span>
+          </button>
+          <button
+            onClick={() => setShowSettings(true)}
+            className="opacity-60 hover:opacity-100 transition-opacity p-1"
+            title="Settings"
+          >
+            ⚙️
+          </button>
+        </div>
+      </div>
 
       {/* 채팅 영역 */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">

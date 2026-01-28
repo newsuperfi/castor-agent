@@ -99,6 +99,24 @@ interface AppState {
   switchAccount: (index: number) => void;
   deleteAccount: (index: number) => void;
   setLocale: (locale: Locale) => void;
+
+  // 세션 관련
+  sessions: SessionSummary[];
+  currentSessionId: string | null;
+  currentSessionTitle: string;
+  showSessionList: boolean;
+  newSession: () => void;
+  loadSession: (sessionId: string) => void;
+  deleteSession: (sessionId: string) => void;
+  toggleSessionList: () => void;
+}
+
+// 세션 요약 (목록용)
+interface SessionSummary {
+  id: string;
+  title: string;
+  updatedAt: number;
+  messageCount: number;
 }
 
 // 모델별 지원 thinking level
@@ -228,6 +246,30 @@ export const useStore = create<AppState>((set, get) => ({
     setI18nLocale(locale);
     set({ locale });
   },
+
+  // 세션 관련 상태 초기값
+  sessions: [],
+  currentSessionId: null,
+  currentSessionTitle: "새 대화",
+  showSessionList: false,
+
+  // 세션 액션
+  newSession: () => {
+    vscode?.postMessage({ type: "newSession", payload: {} });
+    set({ messages: [], currentSessionTitle: "새 대화" });
+  },
+
+  loadSession: (sessionId: string) => {
+    vscode?.postMessage({ type: "loadSession", payload: { sessionId } });
+  },
+
+  deleteSession: (sessionId: string) => {
+    vscode?.postMessage({ type: "deleteSession", payload: { sessionId } });
+  },
+
+  toggleSessionList: () => {
+    set((state) => ({ showSessionList: !state.showSessionList }));
+  },
 }));
 
 // Extension에서 오는 메시지 핸들러
@@ -284,7 +326,41 @@ if (typeof window !== "undefined") {
           thinkingLevel: message.payload.thinkingLevel ?? "high",
           mode: message.payload.mode ?? "edit",
           messages: message.payload.messages ?? [],
+          // 세션 정보
+          ...(message.payload.sessions && {
+            sessions: message.payload.sessions,
+          }),
+          ...(message.payload.currentSessionId && {
+            currentSessionId: message.payload.currentSessionId,
+          }),
+          ...(message.payload.currentSessionTitle && {
+            currentSessionTitle: message.payload.currentSessionTitle,
+          }),
         });
+        break;
+
+      case "sessionsUpdated":
+        // 세션 목록 업데이트
+        if (message.payload.sessions) {
+          useStore.setState({ sessions: message.payload.sessions });
+        }
+        if (message.payload.currentSessionId) {
+          useStore.setState({
+            currentSessionId: message.payload.currentSessionId,
+          });
+        }
+        // 제목 업데이트
+        if (message.payload.titleUpdated) {
+          const { sessionId, title } = message.payload.titleUpdated;
+          useStore.setState((state) => ({
+            sessions: state.sessions.map((s) =>
+              s.id === sessionId ? { ...s, title } : s,
+            ),
+            ...(state.currentSessionId === sessionId && {
+              currentSessionTitle: title,
+            }),
+          }));
+        }
         break;
 
       case "error":
@@ -317,6 +393,10 @@ if (typeof window !== "undefined") {
       useStore.getState().setMode(currentMode === "plan" ? "edit" : "plan");
     }
   });
+
+  // Webview 로드 완료 시 extension에 ready 메시지 전송
+  // Extension이 이 메시지를 받으면 초기 상태를 전송함
+  vscode?.postMessage({ type: "ready", payload: {} });
 }
 
 export type { Account, AgentMode, AIModel, ChatMessage, ThinkingLevel };

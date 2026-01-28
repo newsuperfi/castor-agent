@@ -113,6 +113,7 @@ export type RiskLevel = "SAFE" | "MODERATE" | "HIGH";
 // Webview 메시지 타입
 export type WebviewMessageType =
   | "debug"
+  | "ready"
   | "sendMessage"
   | "receiveMessage"
   | "streamChunk"
@@ -125,9 +126,24 @@ export type WebviewMessageType =
   | "updateSettings"
   | "confirmAction"
   | "cancelAction"
-  | "error";
+  | "error"
+  // 세션 관련
+  | "newSession"
+  | "loadSession"
+  | "deleteSession"
+  | "getSessions"
+  | "sessionsUpdated";
 
 export interface WebviewMessage {
   type: WebviewMessageType;
   payload: unknown;
+}
+
+// 채팅 세션 타입
+export interface ChatSession {
+  id: string;
+  title: string;
+  messages: ChatMessage[];
+  createdAt: number;
+  updatedAt: number;
 }

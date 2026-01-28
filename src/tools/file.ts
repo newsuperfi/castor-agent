@@ -4,7 +4,27 @@
 
 import * as fs from "fs/promises";
 import * as path from "path";
+import * as vscode from "vscode";
 import type { ITool } from "./registry.js";
+
+/**
+ * 상대 경로를 워크스페이스 기준 절대 경로로 변환
+ */
+function resolveWorkspacePath(inputPath: string): string {
+  // 이미 절대 경로면 그대로 반환
+  if (path.isAbsolute(inputPath)) {
+    return inputPath;
+  }
+
+  // 워크스페이스 폴더 기준으로 변환
+  const workspaceFolders = vscode.workspace.workspaceFolders;
+  if (workspaceFolders && workspaceFolders.length > 0) {
+    return path.join(workspaceFolders[0].uri.fsPath, inputPath);
+  }
+
+  // 워크스페이스가 없으면 그대로 반환 (에러 발생할 수 있음)
+  return inputPath;
+}
 
 /**
  * read_file: 파일 내용 읽기
@@ -20,11 +40,12 @@ export const readFileTool: ITool = {
     },
   },
   async execute(args: Record<string, unknown>): Promise<string> {
-    const filePath = args.path as string;
-    if (!filePath) {
+    const inputPath = args.path as string;
+    if (!inputPath) {
       throw new Error("path 파라미터가 필요합니다.");
     }
 
+    const filePath = resolveWorkspacePath(inputPath);
     try {
       const content = await fs.readFile(filePath, "utf-8");
       return content;
@@ -53,13 +74,14 @@ export const writeFileTool: ITool = {
     },
   },
   async execute(args: Record<string, unknown>): Promise<string> {
-    const filePath = args.path as string;
+    const inputPath = args.path as string;
     const content = args.content as string;
 
-    if (!filePath || content === undefined) {
+    if (!inputPath || content === undefined) {
       throw new Error("path와 content 파라미터가 필요합니다.");
     }
 
+    const filePath = resolveWorkspacePath(inputPath);
     try {
       // 디렉토리 생성 (없으면)
       await fs.mkdir(path.dirname(filePath), { recursive: true });
@@ -85,11 +107,12 @@ export const listDirTool: ITool = {
     },
   },
   async execute(args: Record<string, unknown>): Promise<string> {
-    const dirPath = args.path as string;
-    if (!dirPath) {
+    const inputPath = args.path as string;
+    if (!inputPath) {
       throw new Error("path 파라미터가 필요합니다.");
     }
 
+    const dirPath = resolveWorkspacePath(inputPath);
     try {
       const entries = await fs.readdir(dirPath, { withFileTypes: true });
       const result = entries.map((entry) => {

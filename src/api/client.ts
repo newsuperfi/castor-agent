@@ -192,6 +192,12 @@ export async function createAntigravityClient(
         `[Castor/Client] Rotating account: ${activeIndex} -> ${nextIndex} (${accounts[nextIndex]?.email})`,
       );
       await setActiveAccount(context, nextIndex);
+
+      // 새 계정의 project ID를 사용하도록 캐시 무효화
+      const { clearCachedProjectId } =
+        await import("../providers/antigravity.js");
+      clearCachedProjectId();
+
       return true;
     },
     async () => {

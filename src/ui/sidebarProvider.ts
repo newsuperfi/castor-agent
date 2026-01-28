@@ -9,6 +9,17 @@ import {
   switchAccount,
 } from "../auth/antigravity.js";
 import { AntigravityProvider } from "../providers/antigravity.js";
+import {
+  type ChatSession,
+  createNewSession,
+  deleteSession as deleteSessionStorage,
+  generateSessionTitle,
+  getCurrentSessionId,
+  listSessions,
+  loadSession,
+  saveSession,
+  setCurrentSessionId,
+} from "../storage/sessionStorage.js";
 import { registerAllTools, toolRegistry } from "../tools/index.js";
 import type {
   AIModel,
@@ -24,6 +35,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView;
   private messages: ChatMessage[] = [];
   private agentBrain?: AgentBrain;
+  private currentSession?: ChatSession;
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -150,6 +162,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     console.log("[Castor] handleMessage received:", message.type);
 
     switch (message.type) {
+      case "ready":
+        // Webview가 준비되면 초기 상태 전송
+        console.log("[Castor] Webview ready, sending initial state");
+        await this.sendInitialState();
+        break;
+
       case "debug":
         console.log("[Castor/Debug]", message.payload);
         break;
@@ -192,6 +210,27 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       case "confirmAction":
       case "cancelAction":
         // TODO: 에이전트 액션 승인/거부 처리
+        break;
+
+      // 세션 관련
+      case "newSession":
+        await this.handleNewSession();
+        break;
+
+      case "loadSession":
+        await this.handleLoadSession(
+          (message.payload as { sessionId: string }).sessionId,
+        );
+        break;
+
+      case "deleteSession":
+        await this.handleDeleteSession(
+          (message.payload as { sessionId: string }).sessionId,
+        );
+        break;
+
+      case "getSessions":
+        await this.handleGetSessions();
         break;
     }
   }
@@ -394,6 +433,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     this.messages.push(assistantMessage);
     this.postMessage({ type: "receiveMessage", payload: assistantMessage });
+
+    // 세션 저장
+    await this.saveCurrentSession();
   }
 
   /**
@@ -433,12 +475,160 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     }
   }
 
+  // ===== 세션 핸들러 =====
+
   /**
-   * 초기 상태 전송 (다중 계정 포함)
+   * 새 세션 생성
+   */
+  private async handleNewSession(): Promise<void> {
+    // 현재 세션 저장
+    if (this.currentSession && this.currentSession.messages.length > 0) {
+      this.currentSession.updatedAt = Date.now();
+      await saveSession(this.context, this.currentSession);
+    }
+
+    // 새 세션 생성
+    this.currentSession = createNewSession();
+    this.messages = [];
+    await setCurrentSessionId(this.context, this.currentSession.id);
+
+    // 세션 목록 전송
+    await this.sendSessionsUpdate();
+  }
+
+  /**
+   * 세션 로드
+   */
+  private async handleLoadSession(sessionId: string): Promise<void> {
+    // 현재 세션 저장
+    if (this.currentSession && this.currentSession.messages.length > 0) {
+      this.currentSession.updatedAt = Date.now();
+      await saveSession(this.context, this.currentSession);
+    }
+
+    // 세션 로드
+    const session = await loadSession(this.context, sessionId);
+    if (session) {
+      this.currentSession = session;
+      this.messages = session.messages;
+      await setCurrentSessionId(this.context, session.id);
+
+      // 메시지 전송
+      this.postMessage({
+        type: "updateSettings",
+        payload: {
+          messages: this.messages,
+          currentSessionId: session.id,
+          currentSessionTitle: session.title,
+        },
+      });
+    }
+  }
+
+  /**
+   * 세션 삭제
+   */
+  private async handleDeleteSession(sessionId: string): Promise<void> {
+    await deleteSessionStorage(this.context, sessionId);
+
+    // 현재 세션이 삭제된 경우 새 세션 생성
+    if (this.currentSession?.id === sessionId) {
+      await this.handleNewSession();
+    }
+
+    await this.sendSessionsUpdate();
+  }
+
+  /**
+   * 세션 목록 조회
+   */
+  private async handleGetSessions(): Promise<void> {
+    await this.sendSessionsUpdate();
+  }
+
+  /**
+   * 세션 목록 업데이트 전송
+   */
+  private async sendSessionsUpdate(): Promise<void> {
+    const sessions = await listSessions(this.context);
+    this.postMessage({
+      type: "sessionsUpdated",
+      payload: {
+        sessions: sessions.map((s) => ({
+          id: s.id,
+          title: s.title,
+          updatedAt: s.updatedAt,
+          messageCount: s.messages.length,
+        })),
+        currentSessionId: this.currentSession?.id,
+      },
+    });
+  }
+
+  /**
+   * 현재 세션에 메시지 추가 및 저장
+   */
+  private async saveCurrentSession(): Promise<void> {
+    if (!this.currentSession) {
+      this.currentSession = createNewSession();
+      await setCurrentSessionId(this.context, this.currentSession.id);
+    }
+
+    this.currentSession.messages = this.messages;
+    this.currentSession.updatedAt = Date.now();
+
+    // 첫 메시지면 제목 생성
+    if (this.messages.length === 1 && this.currentSession.title === "새 대화") {
+      const firstUserMessage = this.messages[0].content;
+      // 비동기로 제목 생성
+      generateSessionTitle(this.context, firstUserMessage).then(
+        async (title) => {
+          if (this.currentSession) {
+            this.currentSession.title = title;
+            await saveSession(this.context, this.currentSession);
+            // 제목 업데이트 알림
+            this.postMessage({
+              type: "sessionsUpdated",
+              payload: {
+                titleUpdated: {
+                  sessionId: this.currentSession.id,
+                  title,
+                },
+              },
+            });
+          }
+        },
+      );
+    }
+
+    await saveSession(this.context, this.currentSession);
+  }
+
+  /**
+   * 초기 상태 전송 (다중 계정 및 세션 포함)
    */
   private async sendInitialState(): Promise<void> {
     const config = vscode.workspace.getConfiguration("castor");
     const loginStatus = await getLoginStatus(this.context);
+
+    // 마지막 세션 복원
+    const currentSessionId = await getCurrentSessionId(this.context);
+    if (currentSessionId) {
+      const session = await loadSession(this.context, currentSessionId);
+      if (session) {
+        this.currentSession = session;
+        this.messages = session.messages;
+      }
+    }
+
+    // 세션이 없으면 새로 생성
+    if (!this.currentSession) {
+      this.currentSession = createNewSession();
+      await setCurrentSessionId(this.context, this.currentSession.id);
+    }
+
+    // 세션 목록 조회
+    const sessions = await listSessions(this.context);
 
     this.postMessage({
       type: "updateSettings",
@@ -452,6 +642,15 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         thinkingBudget: config.get("thinkingBudget"),
         autoRunMode: config.get("autoRunMode"),
         messages: this.messages,
+        // 세션 정보
+        currentSessionId: this.currentSession.id,
+        currentSessionTitle: this.currentSession.title,
+        sessions: sessions.map((s) => ({
+          id: s.id,
+          title: s.title,
+          updatedAt: s.updatedAt,
+          messageCount: s.messages.length,
+        })),
       },
     });
   }

@@ -20,6 +20,14 @@ import {
 let cachedProjectId: string | null = null;
 
 /**
+ * 캐시된 프로젝트 ID 무효화 (계정 전환 시 호출)
+ */
+export function clearCachedProjectId(): void {
+  console.log("[Castor/Provider] Clearing cached project ID");
+  cachedProjectId = null;
+}
+
+/**
  * onboardUser API를 호출하여 새 프로젝트를 자동 생성
  * PR #205: 2026-01-15부터 유효한 프로젝트 ID가 필수
  */
@@ -410,19 +418,68 @@ export class AntigravityProvider implements IAIProvider {
     // Ref: CodeAssistServer constructor in server.ts
     const sessionId = "";
 
+    // 시스템 프롬프트: AI가 VS Code 확장에서 동작하고 도구를 사용할 수 있음을 알림
+    const systemInstruction = {
+      parts: [
+        {
+          text: `You are Castor, an AI coding assistant integrated into VS Code.
+You have access to tools that allow you to:
+- Read and write files in the user's workspace
+- Execute terminal commands
+- Search code and navigate the codebase
+- Make code edits and refactors
+
+When the user asks you to modify code, create files, or run commands, you should use your available tools to accomplish the task directly.
+Always respond in the same language as the user's message.
+Be concise and helpful. Focus on solving the user's problem efficiently.`,
+        },
+      ],
+    };
+
     // gemini-cli 공식 구조: request 내부에 session_id 포함
     const request: Record<string, unknown> = {
       contents,
       generationConfig,
+      systemInstruction,
       session_id: sessionId,
     };
 
-    // TODO: Gemini 3 모델에서 tools 형식 문제 해결 필요
-    // 현재 "Unknown name 'parameters'" 에러 발생
-    // 참조: https://github.com/NoeFabris/opencode-antigravity-auth README
-    // if (tools.length > 0) {
-    //   request.tools = [...];
-    // }
+    // 도구를 Gemini API 형식으로 변환
+    // Gemini API는 JSON Schema 형식의 parameters를 요구
+    if (tools.length > 0) {
+      const functionDeclarations = tools.map((tool) => {
+        // ITool.parameters를 JSON Schema 형식으로 변환
+        const properties: Record<string, unknown> = {};
+        const required: string[] = [];
+
+        for (const [key, param] of Object.entries(tool.parameters)) {
+          const paramDef = param as {
+            type: string;
+            description: string;
+            required?: boolean;
+          };
+          properties[key] = {
+            type: paramDef.type,
+            description: paramDef.description,
+          };
+          if (paramDef.required) {
+            required.push(key);
+          }
+        }
+
+        return {
+          name: tool.name,
+          description: tool.description,
+          parameters: {
+            type: "object",
+            properties,
+            required,
+          },
+        };
+      });
+
+      request.tools = [{ functionDeclarations }];
+    }
 
     // gemini-cli 공식 구조와 동일
     // Ref: CAGenerateContentRequest in converter.ts
