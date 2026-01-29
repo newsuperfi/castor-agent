@@ -109,6 +109,29 @@ interface AppState {
   loadSession: (sessionId: string) => void;
   deleteSession: (sessionId: string) => void;
   toggleSessionList: () => void;
+
+  // 스트리밍 제어
+  abortStreaming: () => void;
+
+  // Diff Accept/Reject
+  pendingChanges: FileChange[];
+  acceptChange: (fileId: string) => void;
+  rejectChange: (fileId: string) => void;
+  acceptAllChanges: () => void;
+  rejectAllChanges: () => void;
+  setPendingChanges: (changes: FileChange[]) => void;
+}
+
+// 파일 변경사항 타입
+interface FileChange {
+  id: string;
+  filePath: string;
+  fileName: string;
+  changeType: "create" | "modify" | "delete";
+  originalContent?: string;
+  newContent: string;
+  diff?: string;
+  status: "pending" | "accepted" | "rejected";
 }
 
 // 세션 요약 (목록용)
@@ -269,6 +292,57 @@ export const useStore = create<AppState>((set, get) => ({
 
   toggleSessionList: () => {
     set((state) => ({ showSessionList: !state.showSessionList }));
+  },
+
+  // 스트리밍 중단
+  abortStreaming: () => {
+    vscode?.postMessage({ type: "abortStreaming", payload: {} });
+    set({ isStreaming: false });
+  },
+
+  // Diff Accept/Reject
+  pendingChanges: [],
+
+  setPendingChanges: (changes: FileChange[]) => {
+    set({ pendingChanges: changes });
+  },
+
+  acceptChange: (fileId: string) => {
+    set((state) => ({
+      pendingChanges: state.pendingChanges.map((c) =>
+        c.id === fileId ? { ...c, status: "accepted" as const } : c,
+      ),
+    }));
+    vscode?.postMessage({ type: "acceptChange", payload: { fileId } });
+  },
+
+  rejectChange: (fileId: string) => {
+    set((state) => ({
+      pendingChanges: state.pendingChanges.map((c) =>
+        c.id === fileId ? { ...c, status: "rejected" as const } : c,
+      ),
+    }));
+    vscode?.postMessage({ type: "rejectChange", payload: { fileId } });
+  },
+
+  acceptAllChanges: () => {
+    set((state) => ({
+      pendingChanges: state.pendingChanges.map((c) => ({
+        ...c,
+        status: "accepted" as const,
+      })),
+    }));
+    vscode?.postMessage({ type: "acceptAllChanges", payload: {} });
+  },
+
+  rejectAllChanges: () => {
+    set((state) => ({
+      pendingChanges: state.pendingChanges.map((c) => ({
+        ...c,
+        status: "rejected" as const,
+      })),
+    }));
+    vscode?.postMessage({ type: "rejectAllChanges", payload: {} });
   },
 }));
 

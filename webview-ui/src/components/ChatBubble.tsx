@@ -1,5 +1,9 @@
 import { t } from "../i18n";
 import type { ChatMessage } from "../store";
+import { useStore } from "../store";
+import { DiffPreview } from "./DiffPreview";
+import { MarkdownRenderer } from "./MarkdownRenderer";
+import { ToolCallList } from "./ToolCallDisplay";
 
 interface ChatBubbleProps {
   message: ChatMessage;
@@ -9,11 +13,19 @@ export function ChatBubble({ message }: ChatBubbleProps) {
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
 
+  const {
+    pendingChanges,
+    acceptChange,
+    rejectChange,
+    acceptAllChanges,
+    rejectAllChanges,
+  } = useStore();
+
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
       <div
         className={`
-          max-w-[85%] rounded-lg px-4 py-3 space-y-2
+          chat-message max-w-[85%] rounded-lg px-4 py-3 space-y-2 overflow-hidden
           ${
             isUser
               ? "bg-vscode-button-bg text-vscode-button-fg"
@@ -42,45 +54,29 @@ export function ChatBubble({ message }: ChatBubbleProps) {
           </details>
         )}
 
-        {/* 메시지 내용 */}
-        <div className="whitespace-pre-wrap break-words">
-          {formatMessage(message.content)}
+        {/* 메시지 내용 - 마크다운 렌더링 */}
+        <div className="prose prose-invert prose-sm max-w-none">
+          {isUser ? (
+            <p className="whitespace-pre-wrap break-words">{message.content}</p>
+          ) : (
+            <MarkdownRenderer content={message.content} />
+          )}
         </div>
 
-        {/* 도구 실행 결과 (접기/펴기) */}
+        {/* 도구 실행 결과 */}
         {message.toolCalls && message.toolCalls.length > 0 && (
-          <div className="space-y-2 mt-2">
-            {message.toolCalls.map((tc) => (
-              <details
-                key={tc.id}
-                className="text-xs border border-vscode-border rounded overflow-hidden"
-              >
-                <summary
-                  className={`cursor-pointer px-3 py-2 hover:bg-vscode-hover flex items-center gap-2 ${
-                    tc.status === "completed"
-                      ? "text-green-400"
-                      : tc.status === "error"
-                        ? "text-red-400"
-                        : "text-yellow-400"
-                  }`}
-                >
-                  <span className="font-mono">{tc.name}</span>
-                  <span className="opacity-50">
-                    {tc.status === "completed"
-                      ? "✓"
-                      : tc.status === "error"
-                        ? "✗"
-                        : "⋯"}
-                  </span>
-                </summary>
-                {tc.result && (
-                  <pre className="px-3 py-2 bg-black/20 whitespace-pre-wrap overflow-x-auto max-h-48 overflow-y-auto">
-                    {tc.result}
-                  </pre>
-                )}
-              </details>
-            ))}
-          </div>
+          <ToolCallList toolCalls={message.toolCalls} />
+        )}
+
+        {/* Diff Preview (파일 변경사항) */}
+        {pendingChanges.length > 0 && (
+          <DiffPreview
+            changes={pendingChanges}
+            onAccept={acceptChange}
+            onReject={rejectChange}
+            onAcceptAll={acceptAllChanges}
+            onRejectAll={rejectAllChanges}
+          />
         )}
 
         {/* 토큰 사용량 */}
@@ -98,46 +94,6 @@ export function ChatBubble({ message }: ChatBubbleProps) {
       </div>
     </div>
   );
-}
-
-/**
- * 메시지 포맷팅 (마크다운 일부 지원)
- */
-function formatMessage(content: string): React.ReactNode {
-  // 코드 블록 처리
-  const parts = content.split(/(```[\s\S]*?```)/g);
-
-  return parts.map((part, i) => {
-    if (part.startsWith("```")) {
-      const codeContent = part.slice(3, -3);
-      const firstNewline = codeContent.indexOf("\n");
-      const language =
-        firstNewline > 0 ? codeContent.slice(0, firstNewline) : "";
-      const code =
-        firstNewline > 0 ? codeContent.slice(firstNewline + 1) : codeContent;
-
-      return (
-        <pre key={i} className="code-block my-2">
-          {language && (
-            <div className="text-xs opacity-50 mb-1">{language}</div>
-          )}
-          <code>{code}</code>
-        </pre>
-      );
-    }
-
-    // 인라인 코드 처리
-    return part.split(/(`[^`]+`)/g).map((segment, j) => {
-      if (segment.startsWith("`") && segment.endsWith("`")) {
-        return (
-          <code key={`${i}-${j}`} className="px-1 py-0.5 rounded bg-black/20">
-            {segment.slice(1, -1)}
-          </code>
-        );
-      }
-      return segment;
-    });
-  });
 }
 
 /**

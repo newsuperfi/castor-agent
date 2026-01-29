@@ -83,7 +83,7 @@ export default function App() {
             className="opacity-60 hover:opacity-100 transition-opacity p-1"
             title="Settings"
           >
-            ⚙️
+            [=]
           </button>
         </div>
       </div>

@@ -14,7 +14,11 @@ import type {
 export interface AgentConfig {
   maxTurns: number; // 도구 호출 최대 횟수
   mode: "edit" | "plan"; // 실행 모드
+  requireApproval: boolean; // 위험 도구 실행 전 승인 필요 여부
 }
+
+// 위험한 도구 목록 (실행 전 승인 필요)
+const DANGEROUS_TOOLS = new Set(["write_file", "run_command", "apply_diff"]);
 
 export interface AgentTurn {
   thinking?: string;
@@ -63,6 +67,7 @@ export class AgentBrain {
     this.config = {
       maxTurns: config.maxTurns ?? 25,
       mode: config.mode ?? "edit",
+      requireApproval: config.requireApproval ?? false,
     };
     this.state = this.createInitialState();
   }
@@ -141,9 +146,18 @@ export class AgentBrain {
           break;
         }
 
-        // 도구 실행
+        // 도구 실행 (plan 모드에서는 실행하지 않음)
         for (const toolCall of turn.toolCalls) {
           if (this.state.aborted) break;
+
+          // Plan 모드에서는 도구를 실행하지 않고 계획만 반환
+          if (this.config.mode === "plan") {
+            toolCall.status = "pending";
+            toolCall.result =
+              "[Plan Mode] 도구 실행이 비활성화되었습니다. Edit 모드로 전환하여 실행하세요.";
+            yield { type: "tool_end", toolCall };
+            continue;
+          }
 
           const executor = this.toolExecutors.get(toolCall.name);
           if (!executor) {
@@ -165,15 +179,23 @@ export class AgentBrain {
           yield { type: "tool_end", toolCall };
         }
 
-        // 도구 결과를 대화에 추가
-        const toolResultMessage: ChatMessage = {
+        // 1. AI의 도구 호출 응답을 대화에 추가 (model role)
+        const assistantMessage: ChatMessage = {
           id: crypto.randomUUID(),
           role: "assistant",
-          content: turn.toolCalls
-            .map((tc) => `Tool ${tc.name}: ${tc.result || "No result"}`)
-            .join("\n"),
+          content: turn.text || "",
           timestamp: Date.now(),
           toolCalls: turn.toolCalls,
+        };
+        conversationMessages.push(assistantMessage);
+
+        // 2. 도구 결과를 대화에 추가 (user role + functionResponse 형식)
+        const toolResultMessage: ChatMessage = {
+          id: crypto.randomUUID(),
+          role: "user",
+          content: "", // 내용은 toolCalls에서 가져옴
+          timestamp: Date.now(),
+          toolCalls: turn.toolCalls, // functionResponse 변환용
         };
         conversationMessages.push(toolResultMessage);
 

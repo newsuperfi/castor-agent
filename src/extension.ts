@@ -41,6 +41,16 @@ export function activate(context: vscode.ExtensionContext): void {
     ),
   );
 
+  // 인라인 Diff 매니저 초기화
+  import("./ui/inlineDiffManager.js")
+    .then(({ initInlineDiffManager }) => {
+      initInlineDiffManager(context);
+      console.log("[Castor] Inline Diff Manager 초기화 완료");
+    })
+    .catch((err) =>
+      console.error("[Castor] Inline Diff Manager 초기화 실패:", err),
+    );
+
   // Sidebar Webview Provider 등록
   const sidebarProvider = new SidebarProvider(context.extensionUri, context);
 
@@ -106,6 +116,37 @@ export function activate(context: vscode.ExtensionContext): void {
       vscode.window.showInformationMessage(
         "플래닝 보드 기능은 Phase 2에서 구현됩니다.",
       );
+    }),
+  );
+
+  // 채팅창 포커스 (Cmd+Shift+C)
+  context.subscriptions.push(
+    vscode.commands.registerCommand("castor.focusChat", () => {
+      vscode.commands.executeCommand("castor.chatView.focus");
+    }),
+  );
+
+  // 새 대화 (Cmd+L)
+  context.subscriptions.push(
+    vscode.commands.registerCommand("castor.newChat", () => {
+      // 먼저 채팅창 포커스
+      vscode.commands.executeCommand("castor.chatView.focus");
+      // SidebarProvider에게 새 대화 시작 메시지 전송
+      sidebarProvider.handleNewSession();
+    }),
+  );
+
+  // Diff Accept (에디터 타이틀 버튼)
+  context.subscriptions.push(
+    vscode.commands.registerCommand("castor.acceptChange", async () => {
+      await sidebarProvider.handleAcceptCurrentDiff();
+    }),
+  );
+
+  // Diff Reject (에디터 타이틀 버튼)
+  context.subscriptions.push(
+    vscode.commands.registerCommand("castor.rejectChange", async () => {
+      await sidebarProvider.handleRejectCurrentDiff();
     }),
   );
 }

@@ -98,16 +98,15 @@ export function SessionList() {
                   <button
                     onClick={(e) => {
                       e.stopPropagation();
-                      if (confirm("이 대화를 삭제하시겠습니까?")) {
-                        deleteSession(session.id);
-                      }
+                      // WebView에서는 confirm이 작동하지 않으므로 바로 삭제
+                      deleteSession(session.id);
                     }}
                     className={`opacity-0 group-hover:opacity-60 hover:opacity-100 ml-2 p-1 hover:text-red-400 ${
                       session.id === currentSessionId ? "text-white" : ""
                     }`}
                     title="삭제"
                   >
-                    🗑
+                    [x]
                   </button>
                 </div>
               ))}

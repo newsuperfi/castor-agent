@@ -272,5 +272,23 @@ export async function clearAllAccounts(
   await context.secrets.delete(ANTIGRAVITY_ACCOUNTS_KEY);
 }
 
+/**
+ * 활성 계정의 projectId 업데이트
+ */
+export async function updateAccountProjectId(
+  context: vscode.ExtensionContext,
+  projectId: string,
+): Promise<void> {
+  const data = await getAccountsData(context);
+  if (data.activeIndex < 0 || data.activeIndex >= data.accounts.length) {
+    return;
+  }
+  data.accounts[data.activeIndex].projectId = projectId;
+  await saveAccountsData(context, data);
+  console.log(
+    `[Castor/SecretStorage] Updated projectId for account ${data.accounts[data.activeIndex].email}: ${projectId}`,
+  );
+}
+
 // 타입 내보내기
 export type { AccountInfo, AccountsData };

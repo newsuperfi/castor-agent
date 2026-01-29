@@ -1,6 +1,11 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { t } from "../i18n";
 import { useStore, type AIModel } from "../store";
+import {
+  ImageDropZone,
+  ImagePreview,
+  type ImageAttachment,
+} from "./ImageDropZone";
 
 // 모델 설정
 interface ModelConfig {
@@ -69,13 +74,14 @@ const MODELS: ModelConfig[] = [
 ];
 
 interface ChatInputBarProps {
-  onSend: (content: string) => void;
+  onSend: (content: string, images?: ImageAttachment[]) => void;
   disabled?: boolean;
 }
 
 export function ChatInputBar({ onSend, disabled }: ChatInputBarProps) {
   const [input, setInput] = useState("");
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [attachedImages, setAttachedImages] = useState<ImageAttachment[]>([]);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const {
@@ -83,10 +89,12 @@ export function ChatInputBar({ onSend, disabled }: ChatInputBarProps) {
     model,
     thinkingLevel,
     showModelPicker,
+    isStreaming,
     setMode,
     setModel,
     cycleThinkingLevel,
     toggleModelPicker,
+    abortStreaming,
   } = useStore();
 
   const currentModel = MODELS.find((m) => m.value === model);
@@ -106,11 +114,23 @@ export function ChatInputBar({ onSend, disabled }: ChatInputBarProps) {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (input.trim() && !disabled) {
-      onSend(input.trim());
+    if ((input.trim() || attachedImages.length > 0) && !disabled) {
+      onSend(
+        input.trim(),
+        attachedImages.length > 0 ? attachedImages : undefined,
+      );
       setInput("");
+      setAttachedImages([]);
     }
   };
+
+  const handleImagesAdded = useCallback((images: ImageAttachment[]) => {
+    setAttachedImages((prev) => [...prev, ...images].slice(0, 5));
+  }, []);
+
+  const handleImageRemove = useCallback((id: string) => {
+    setAttachedImages((prev) => prev.filter((img) => img.id !== id));
+  }, []);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -216,6 +236,19 @@ export function ChatInputBar({ onSend, disabled }: ChatInputBarProps) {
       <div className="p-3">
         <form onSubmit={handleSubmit}>
           <div className="bg-vscode-input rounded-lg border border-vscode-border focus-within:border-vscode-focus">
+            {/* 첨부된 이미지 프리뷰 */}
+            <ImagePreview
+              images={attachedImages}
+              onRemove={handleImageRemove}
+            />
+
+            {/* 이미지 드롭존 (이미지 없을 때만 표시) */}
+            {attachedImages.length === 0 && (
+              <div className="px-3 pt-2">
+                <ImageDropZone onImagesAdded={handleImagesAdded} />
+              </div>
+            )}
+
             {/* 텍스트 입력 */}
             <textarea
               value={input}
@@ -283,14 +316,26 @@ export function ChatInputBar({ onSend, disabled }: ChatInputBarProps) {
                 )}
               </div>
 
-              {/* 오른쪽: 전송 버튼 */}
-              <button
-                type="submit"
-                disabled={!input.trim() || disabled}
-                className="btn-primary text-xs px-3 py-1 disabled:opacity-50"
-              >
-                {t("send")}
-              </button>
+              {/* 오른쪽: 전송/중단 버튼 */}
+              {isStreaming ? (
+                <button
+                  type="button"
+                  onClick={abortStreaming}
+                  className="bg-red-600 hover:bg-red-700 text-white text-xs px-3 py-1 rounded"
+                >
+                  Stop
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  disabled={
+                    (!input.trim() && attachedImages.length === 0) || disabled
+                  }
+                  className="btn-primary text-xs px-3 py-1 disabled:opacity-50"
+                >
+                  {t("send")}
+                </button>
+              )}
             </div>
           </div>
         </form>

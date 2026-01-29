@@ -16,15 +16,53 @@ import {
   THINKING_BUDGET,
 } from "./constants.js";
 
-// 프로젝트 ID 캐시
-let cachedProjectId: string | null = null;
+// 계정별 프로젝트 ID 캐시 (email -> projectId)
+const projectIdCache = new Map<string, string>();
+let currentAccountEmail: string | null = null;
 
 /**
- * 캐시된 프로젝트 ID 무효화 (계정 전환 시 호출)
+ * 현재 계정 설정 (계정 로테이션 시 호출)
+ */
+export function setCurrentAccount(email: string, projectId?: string): void {
+  console.log(
+    `[Castor/Provider] Setting current account: ${email}, projectId: ${projectId || "none"}`,
+  );
+  currentAccountEmail = email;
+  if (projectId) {
+    projectIdCache.set(email, projectId);
+  }
+}
+
+/**
+ * 캐시된 프로젝트 ID 무효화 (계정 전환 시 호출) - 레거시 호환성
  */
 export function clearCachedProjectId(): void {
-  console.log("[Castor/Provider] Clearing cached project ID");
-  cachedProjectId = null;
+  console.log(
+    "[Castor/Provider] Clearing cached project ID for current account",
+  );
+  if (currentAccountEmail) {
+    projectIdCache.delete(currentAccountEmail);
+  }
+}
+
+/**
+ * 현재 계정의 캐시된 projectId 가져오기
+ */
+function getCachedProjectId(): string | null {
+  if (!currentAccountEmail) return null;
+  return projectIdCache.get(currentAccountEmail) || null;
+}
+
+/**
+ * 현재 계정의 projectId 캐시에 저장
+ */
+function setCachedProjectId(projectId: string): void {
+  if (currentAccountEmail) {
+    projectIdCache.set(currentAccountEmail, projectId);
+    console.log(
+      `[Castor/Provider] Cached projectId for ${currentAccountEmail}: ${projectId}`,
+    );
+  }
 }
 
 /**
@@ -105,9 +143,10 @@ async function onboardManagedProject(
  * 없으면 onboardUser로 자동 프로비저닝 시도 (PR #205)
  */
 async function loadManagedProjectId(client: AxiosInstance): Promise<string> {
-  if (cachedProjectId) {
-    console.log("[Castor/Provider] Using cached project ID:", cachedProjectId);
-    return cachedProjectId;
+  const cached = getCachedProjectId();
+  if (cached) {
+    console.log("[Castor/Provider] Using cached project ID:", cached);
+    return cached;
   }
 
   // Production 우선 폴백 순서 사용
@@ -160,7 +199,7 @@ async function loadManagedProjectId(client: AxiosInstance): Promise<string> {
 
       if (projectId) {
         console.log("[Castor/Provider] Got managed project ID:", projectId);
-        cachedProjectId = projectId;
+        setCachedProjectId(projectId);
         return projectId;
       }
     } catch (error) {
@@ -184,7 +223,7 @@ async function loadManagedProjectId(client: AxiosInstance): Promise<string> {
 
   const provisionedId = await onboardManagedProject(client, tierId);
   if (provisionedId) {
-    cachedProjectId = provisionedId;
+    setCachedProjectId(provisionedId);
     return provisionedId;
   }
 
@@ -378,10 +417,57 @@ export class AntigravityProvider implements IAIProvider {
     options: GenerateOptions,
     apiModel: string,
   ): Promise<Record<string, unknown>> {
-    const contents = messages.map((msg) => ({
-      role: msg.role === "assistant" ? "model" : msg.role,
-      parts: [{ text: msg.content }],
-    }));
+    const contents = messages.map((msg) => {
+      // 도구 결과가 있는 user 메시지는 functionResponse 형식으로 변환
+      if (msg.role === "user" && msg.toolCalls && msg.toolCalls.length > 0) {
+        return {
+          role: "user",
+          parts: msg.toolCalls.map((tc) => ({
+            functionResponse: {
+              name: tc.name,
+              response: {
+                result: tc.result || "No result",
+              },
+            },
+          })),
+        };
+      }
+
+      // AI의 도구 호출 응답 (assistant)은 functionCall 형식으로 변환
+      if (
+        msg.role === "assistant" &&
+        msg.toolCalls &&
+        msg.toolCalls.length > 0
+      ) {
+        const parts: unknown[] = [];
+
+        // 텍스트가 있으면 먼저 추가
+        if (msg.content) {
+          parts.push({ text: msg.content });
+        }
+
+        // 도구 호출 추가
+        for (const tc of msg.toolCalls) {
+          parts.push({
+            functionCall: {
+              name: tc.name,
+              args: tc.arguments,
+            },
+          });
+        }
+
+        return {
+          role: "model",
+          parts,
+        };
+      }
+
+      // 일반 메시지는 텍스트로 변환
+      return {
+        role: msg.role === "assistant" ? "model" : msg.role,
+        parts: [{ text: msg.content }],
+      };
+    });
 
     const generationConfig: Record<string, unknown> = {
       temperature: 1,

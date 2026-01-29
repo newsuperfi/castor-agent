@@ -67,6 +67,25 @@ export interface ToolCall {
   status: "pending" | "running" | "completed" | "error";
 }
 
+// 대기 중인 파일 변경사항 (Accept/Reject 용)
+export interface FileChange {
+  id: string;
+  filePath: string;
+  fileName: string;
+  changeType: "create" | "modify" | "delete";
+  originalContent?: string; // 원본 내용 (수정/삭제 시)
+  newContent: string; // 새 내용
+  diff?: string; // unified diff 형식
+  status: "pending" | "accepted" | "rejected";
+}
+
+export interface PendingChanges {
+  id: string;
+  toolCallId: string;
+  files: FileChange[];
+  createdAt: number;
+}
+
 // AI 제공자 인터페이스
 export interface IAIProvider {
   providerId: string;
@@ -132,7 +151,25 @@ export type WebviewMessageType =
   | "loadSession"
   | "deleteSession"
   | "getSessions"
-  | "sessionsUpdated";
+  | "sessionsUpdated"
+  // 컨텍스트 관련
+  | "getContext"
+  | "getSelection"
+  | "contextResult"
+  // 스트리밍 제어
+  | "abortStreaming"
+  // 대화 내보내기
+  | "exportConversation"
+  // 코드 블록 실행
+  | "runCodeBlock"
+  // Diff Accept/Reject
+  | "pendingChanges"
+  | "acceptChange"
+  | "rejectChange"
+  | "acceptAllChanges"
+  | "rejectAllChanges"
+  // Editor Diff View
+  | "showDiffInEditor";
 
 export interface WebviewMessage {
   type: WebviewMessageType;

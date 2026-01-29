@@ -66,6 +66,63 @@
       {
         "command": "castor.selectModel",
         "title": "Castor: 모델 선택"
+      },
+      {
+        "command": "castor.newChat",
+        "title": "Castor: 새 대화"
+      },
+      {
+        "command": "castor.focusChat",
+        "title": "Castor: 채팅창 포커스"
+      },
+      {
+        "command": "castor.captureScreenshot",
+        "title": "Castor: 스크린샷 캡처"
+      },
+      {
+        "command": "castor.exportConversation",
+        "title": "Castor: 대화 내보내기"
+      },
+      {
+        "command": "castor.acceptChange",
+        "title": "Accept Change",
+        "icon": "$(check)"
+      },
+      {
+        "command": "castor.rejectChange",
+        "title": "Reject Change",
+        "icon": "$(close)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "castor.acceptChange",
+          "when": "resourceScheme == castor-diff",
+          "group": "navigation@1"
+        },
+        {
+          "command": "castor.rejectChange",
+          "when": "resourceScheme == castor-diff",
+          "group": "navigation@2"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "castor.focusChat",
+        "key": "cmd+shift+c",
+        "mac": "cmd+shift+c",
+        "win": "ctrl+shift+c",
+        "linux": "ctrl+shift+c"
+      },
+      {
+        "command": "castor.newChat",
+        "key": "cmd+l",
+        "mac": "cmd+l",
+        "win": "ctrl+l",
+        "linux": "ctrl+l",
+        "when": "view.castor.chatView.visible"
       }
     ],
     "configuration": {

@@ -84,3 +84,29 @@ body {
   font-family: var(--vscode-editor-font-family, monospace);
   font-size: var(--vscode-editor-font-size, 12px);
 }
+
+/* 채팅 버블 오버플로우 방지 */
+.chat-message {
+  @apply overflow-hidden;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+.chat-message pre {
+  @apply overflow-x-auto;
+  max-width: 100%;
+}
+
+.chat-message p {
+  word-break: break-word;
+}
+
+/* prose 내 long text 처리 */
+.prose pre {
+  @apply overflow-x-auto whitespace-pre-wrap;
+  word-break: break-all;
+}
+
+.prose code {
+  word-break: break-all;
+}

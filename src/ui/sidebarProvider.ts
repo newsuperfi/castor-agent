@@ -10,7 +10,6 @@ import {
 } from "../auth/antigravity.js";
 import { AntigravityProvider } from "../providers/antigravity.js";
 import {
-  type ChatSession,
   createNewSession,
   deleteSession as deleteSessionStorage,
   generateSessionTitle,
@@ -19,6 +18,7 @@ import {
   loadSession,
   saveSession,
   setCurrentSessionId,
+  type ChatSession,
 } from "../storage/sessionStorage.js";
 import { registerAllTools, toolRegistry } from "../tools/index.js";
 import type {
@@ -27,6 +27,12 @@ import type {
   GenerateOptions,
   WebviewMessage,
 } from "../types.js";
+import {
+  formatMessageWithContext,
+  getActiveEditorContext,
+  getSelectedTextContext,
+  parseFileMentions,
+} from "../utils/contextUtils.js";
 
 /**
  * Sidebar 채팅창 Webview Provider
@@ -36,6 +42,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private messages: ChatMessage[] = [];
   private agentBrain?: AgentBrain;
   private currentSession?: ChatSession;
+  private isAborted = false;
+  private pendingChanges: Map<string, { filePath: string; content: string }> =
+    new Map();
+  private diffContentProvider?: Map<string, string>;
+  private currentDiffFile?: {
+    fileId: string;
+    filePath: string;
+    originalContent: string;
+    newContent: string;
+  };
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -232,6 +248,56 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       case "getSessions":
         await this.handleGetSessions();
         break;
+
+      // 컨텍스트 관련
+      case "getContext":
+        this.handleGetContext();
+        break;
+
+      case "getSelection":
+        this.handleGetSelection();
+        break;
+
+      case "abortStreaming":
+        this.handleAbortStreaming();
+        break;
+
+      case "exportConversation":
+        this.handleExportConversation();
+        break;
+
+      case "runCodeBlock":
+        this.handleRunCodeBlock(
+          message.payload as { code: string; language: string },
+        );
+        break;
+
+      case "acceptChange":
+        this.handleAcceptChange(message.payload as { fileId: string });
+        break;
+
+      case "rejectChange":
+        this.handleRejectChange(message.payload as { fileId: string });
+        break;
+
+      case "acceptAllChanges":
+        this.handleAcceptAllChanges();
+        break;
+
+      case "rejectAllChanges":
+        this.handleRejectAllChanges();
+        break;
+
+      case "showDiffInEditor":
+        this.handleShowDiffInEditor(
+          message.payload as {
+            fileId: string;
+            filePath: string;
+            originalContent: string;
+            newContent: string;
+          },
+        );
+        break;
     }
   }
 
@@ -251,15 +317,45 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       payload.content.substring(0, 50),
     );
 
+    // @파일명 멘션 파싱 및 파일 내용 첨부
+    const { message: parsedMessage, contexts } = await parseFileMentions(
+      payload.content,
+    );
+    const enhancedContent =
+      contexts.length > 0
+        ? formatMessageWithContext(parsedMessage, contexts)
+        : parsedMessage;
+
+    if (contexts.length > 0) {
+      console.log(
+        `[Castor] @멘션 ${contexts.length}개 파일 첨부됨:`,
+        contexts.map((c) => c.path).join(", "),
+      );
+    }
+
     const userMessage: ChatMessage = {
       id: crypto.randomUUID(),
       role: "user",
-      content: payload.content,
+      content: enhancedContent,
       timestamp: Date.now(),
     };
 
     this.messages.push(userMessage);
     // 사용자 메시지는 webview에서 이미 표시하므로 여기서 보내지 않음
+
+    // 세션 제목 자동 생성 (첫 메시지일 때만)
+    if (
+      this.currentSession &&
+      this.currentSession.title === "새 대화" &&
+      this.messages.length === 1
+    ) {
+      // 첫 메시지의 처음 30자를 제목으로 사용
+      const newTitle = parsedMessage.substring(0, 30).trim() || "새 대화";
+      this.currentSession.title =
+        newTitle + (parsedMessage.length > 30 ? "..." : "");
+      await this.saveCurrentSession();
+      await this.sendSessionsUpdate();
+    }
 
     // 로그인 상태 확인
     console.log("[Castor] Checking login status...");
@@ -309,6 +405,11 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         vscode.window.showInformationMessage(
           `[Castor] Logged in as: ${account.email}`,
         );
+
+        // 현재 계정 정보를 provider에 전달 (projectId 포함)
+        const { setCurrentAccount } =
+          await import("../providers/antigravity.js");
+        setCurrentAccount(account.email, account.projectId);
 
         const client = await createAntigravityClient(this.context);
         const provider = new AntigravityProvider(client);
@@ -426,16 +527,72 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       }
     } catch (error) {
       console.error("[Castor] handleSendMessage error:", error);
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      vscode.window.showErrorMessage(`[Castor] Error: ${errorMsg}`);
-      assistantMessage.content = `⚠️ 오류가 발생했습니다: ${errorMsg}`;
+
+      // 에러 분류 및 사용자 친화적 메시지 생성
+      const { classifyError, formatErrorForUser } =
+        await import("../utils/errorUtils.js");
+      const classified = classifyError(error);
+      const userMessage = formatErrorForUser(classified);
+
+      vscode.window.showErrorMessage(`[Castor] ${classified.message}`);
+      assistantMessage.content = userMessage;
     }
 
     this.messages.push(assistantMessage);
     this.postMessage({ type: "receiveMessage", payload: assistantMessage });
 
+    // Plan 모드에서는 Markdown Preview로 표시
+    if (payload.mode === "plan" && assistantMessage.content.trim()) {
+      await this.showImplementationPlan(assistantMessage.content);
+    }
+
     // 세션 저장
     await this.saveCurrentSession();
+  }
+
+  /**
+   * Implementation Plan을 Markdown Preview로 표시
+   */
+  private async showImplementationPlan(content: string): Promise<void> {
+    const fs = await import("fs/promises");
+    const path = await import("path");
+    const crypto = await import("crypto");
+
+    // 프로젝트별 디렉토리 생성
+    const workspaceFolder =
+      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || "default";
+    const projectHash = crypto
+      .createHash("md5")
+      .update(workspaceFolder)
+      .digest("hex")
+      .slice(0, 8);
+    const projectName = path.basename(workspaceFolder);
+
+    const projectDir = path.join(
+      this.context.globalStorageUri.fsPath,
+      "projects",
+      `${projectName}-${projectHash}`,
+    );
+
+    // 디렉토리 생성
+    await fs.mkdir(projectDir, { recursive: true });
+
+    // Markdown 파일 생성
+    const planPath = path.join(projectDir, "implementation_plan.md");
+    const markdownContent = `# Implementation Plan
+
+${content}
+
+---
+*Generated by Castor Agent*
+`;
+    await fs.writeFile(planPath, markdownContent, "utf-8");
+
+    // Markdown 파일 열기 및 프리뷰 표시
+    const planUri = vscode.Uri.file(planPath);
+    const doc = await vscode.workspace.openTextDocument(planUri);
+    await vscode.window.showTextDocument(doc, vscode.ViewColumn.One);
+    await vscode.commands.executeCommand("markdown.showPreview", planUri);
   }
 
   /**
@@ -480,7 +637,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   /**
    * 새 세션 생성
    */
-  private async handleNewSession(): Promise<void> {
+  async handleNewSession(): Promise<void> {
     // 현재 세션 저장
     if (this.currentSession && this.currentSession.messages.length > 0) {
       this.currentSession.updatedAt = Date.now();
@@ -563,6 +720,258 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         currentSessionId: this.currentSession?.id,
       },
     });
+  }
+
+  // ===== 컨텍스트 핸들러 =====
+
+  /**
+   * 현재 열린 파일 컨텍스트 가져오기
+   */
+  private handleGetContext(): void {
+    const context = getActiveEditorContext();
+    this.postMessage({
+      type: "contextResult",
+      payload: {
+        type: "activeFile",
+        context,
+      },
+    });
+  }
+
+  /**
+   * 현재 선택된 텍스트 가져오기
+   */
+  private handleGetSelection(): void {
+    const context = getSelectedTextContext();
+    this.postMessage({
+      type: "contextResult",
+      payload: {
+        type: "selection",
+        context,
+      },
+    });
+  }
+
+  /**
+   * 스트리밍 중단 처리
+   */
+  private handleAbortStreaming(): void {
+    console.log("[Castor] Abort streaming requested");
+    this.isAborted = true;
+    this.agentBrain?.abort();
+  }
+
+  /**
+   * 대화 내보내기 처리
+   */
+  private async handleExportConversation(): Promise<void> {
+    const { exportConversation } = await import("../utils/exportUtils.js");
+    await exportConversation(this.messages, this.currentSession?.title);
+  }
+
+  /**
+   * 코드 블록 실행 처리
+   */
+  private async handleRunCodeBlock(payload: {
+    code: string;
+    language: string;
+  }): Promise<void> {
+    const terminal = vscode.window.createTerminal({
+      name: "Castor 실행",
+      hideFromUser: false,
+    });
+    terminal.show();
+    terminal.sendText(payload.code);
+    vscode.window.showInformationMessage("코드가 터미널에서 실행되었습니다.");
+  }
+
+  /**
+   * 변경사항 승인 (개별)
+   */
+  private async handleAcceptChange(payload: { fileId: string }): Promise<void> {
+    const change = this.pendingChanges.get(payload.fileId);
+    if (!change) {
+      vscode.window.showWarningMessage("변경사항을 찾을 수 없습니다.");
+      return;
+    }
+
+    try {
+      const uri = vscode.Uri.file(change.filePath);
+      await vscode.workspace.fs.writeFile(
+        uri,
+        Buffer.from(change.content, "utf-8"),
+      );
+      this.pendingChanges.delete(payload.fileId);
+      vscode.window.showInformationMessage(
+        `파일이 저장되었습니다: ${change.filePath}`,
+      );
+    } catch (error) {
+      vscode.window.showErrorMessage(`파일 저장 실패: ${error}`);
+    }
+  }
+
+  /**
+   * 변경사항 거부 (개별)
+   */
+  private handleRejectChange(payload: { fileId: string }): void {
+    this.pendingChanges.delete(payload.fileId);
+    vscode.window.showInformationMessage("변경사항이 거부되었습니다.");
+  }
+
+  /**
+   * 모든 변경사항 승인
+   */
+  private async handleAcceptAllChanges(): Promise<void> {
+    for (const [id, change] of this.pendingChanges) {
+      try {
+        const uri = vscode.Uri.file(change.filePath);
+        await vscode.workspace.fs.writeFile(
+          uri,
+          Buffer.from(change.content, "utf-8"),
+        );
+      } catch (error) {
+        vscode.window.showErrorMessage(`파일 저장 실패: ${change.filePath}`);
+      }
+    }
+    const count = this.pendingChanges.size;
+    this.pendingChanges.clear();
+    vscode.window.showInformationMessage(`${count}개 파일이 저장되었습니다.`);
+  }
+
+  /**
+   * 모든 변경사항 거부
+   */
+  private handleRejectAllChanges(): void {
+    const count = this.pendingChanges.size;
+    this.pendingChanges.clear();
+    vscode.window.showInformationMessage(
+      `${count}개 변경사항이 거부되었습니다.`,
+    );
+  }
+
+  /**
+   * 에디터에서 Diff 뷰 열기
+   */
+  private async handleShowDiffInEditor(payload: {
+    fileId: string;
+    filePath: string;
+    originalContent: string;
+    newContent: string;
+  }): Promise<void> {
+    try {
+      const originalUri = vscode.Uri.parse(
+        `castor-diff:${payload.filePath}?original`,
+      );
+      const modifiedUri = vscode.Uri.parse(
+        `castor-diff:${payload.filePath}?modified`,
+      );
+
+      // TextDocumentContentProvider 등록 (이미 등록되어 있지 않은 경우)
+      if (!this.diffContentProvider) {
+        this.diffContentProvider = new Map<string, string>();
+        vscode.workspace.registerTextDocumentContentProvider("castor-diff", {
+          provideTextDocumentContent: (uri) => {
+            return this.diffContentProvider?.get(uri.toString()) || "";
+          },
+        });
+      }
+
+      // 현재 diff 파일 정보 저장 (Accept/Reject 버튼용)
+      this.currentDiffFile = {
+        fileId: payload.fileId,
+        filePath: payload.filePath,
+        originalContent: payload.originalContent,
+        newContent: payload.newContent,
+      };
+
+      // 콘텐츠 저장
+      this.diffContentProvider.set(
+        originalUri.toString(),
+        payload.originalContent,
+      );
+      this.diffContentProvider.set(modifiedUri.toString(), payload.newContent);
+
+      // Diff 뷰어 열기
+      const fileName = payload.filePath.split("/").pop() || "file";
+      await vscode.commands.executeCommand(
+        "vscode.diff",
+        originalUri,
+        modifiedUri,
+        `${fileName} (Changes)`,
+      );
+    } catch (error) {
+      vscode.window.showErrorMessage(`Diff 뷰어 열기 실패: ${error}`);
+    }
+  }
+
+  /**
+   * 현재 Diff Accept (에디터 타이틀 버튼에서 호출)
+   */
+  public async handleAcceptCurrentDiff(): Promise<void> {
+    // global state에서 현재 diff 정보 가져오기
+    const globalState = global as Record<string, unknown>;
+    const currentDiff = globalState.castorCurrentDiff as
+      | {
+          fileId: string;
+          filePath: string;
+          newContent: string;
+        }
+      | undefined;
+
+    if (!currentDiff) {
+      vscode.window.showWarningMessage("No pending changes to accept.");
+      return;
+    }
+
+    try {
+      // 디렉토리 생성 (없으면)
+      const fs = await import("fs/promises");
+      const path = await import("path");
+      await fs.mkdir(path.dirname(currentDiff.filePath), { recursive: true });
+
+      // 파일 저장
+      await fs.writeFile(currentDiff.filePath, currentDiff.newContent, "utf-8");
+      vscode.window.showInformationMessage(
+        `File saved: ${currentDiff.filePath}`,
+      );
+
+      // Diff 에디터 닫기
+      await vscode.commands.executeCommand(
+        "workbench.action.closeActiveEditor",
+      );
+
+      // 저장된 파일 열기
+      const uri = vscode.Uri.file(currentDiff.filePath);
+      await vscode.window.showTextDocument(uri);
+
+      // 상태 초기화
+      globalState.castorCurrentDiff = undefined;
+    } catch (error) {
+      vscode.window.showErrorMessage(`Failed to save file: ${error}`);
+    }
+  }
+
+  /**
+   * 현재 Diff Reject (에디터 타이틀 버튼에서 호출)
+   */
+  public async handleRejectCurrentDiff(): Promise<void> {
+    // global state에서 현재 diff 정보 가져오기
+    const globalState = global as Record<string, unknown>;
+    const currentDiff = globalState.castorCurrentDiff as
+      | { fileId: string }
+      | undefined;
+
+    if (!currentDiff) {
+      vscode.window.showWarningMessage("No pending changes to reject.");
+      return;
+    }
+
+    // Diff 에디터 닫기
+    await vscode.commands.executeCommand("workbench.action.closeActiveEditor");
+    vscode.window.showInformationMessage("Changes rejected.");
+
+    // 상태 초기화
+    globalState.castorCurrentDiff = undefined;
   }
 
   /**
