@@ -20,6 +20,7 @@ export default function App() {
     sendMessage,
     login,
     toggleSessionList,
+    thinkingLevel,
   } = useStore();
 
   // 메시지 추가 시 스크롤
@@ -110,7 +111,9 @@ export default function App() {
         {isStreaming && !currentThinking && (
           <div className="flex items-center gap-2 text-sm opacity-60">
             <div className="animate-spin w-4 h-4 border-2 border-current border-t-transparent rounded-full" />
-            <span>{t("thinking")}</span>
+            <span>
+              {thinkingLevel === "off" ? "응답 생성 중..." : t("thinking")}
+            </span>
           </div>
         )}
 

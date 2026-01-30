@@ -20,7 +20,9 @@ export function createApiClient(
   baseURL: string,
   getToken: () => Promise<AuthToken | null>,
   refreshToken: () => Promise<AuthToken | null>,
-  onRateLimited?: () => Promise<boolean>,
+  onRateLimited?: () => Promise<
+    boolean | { rotated: boolean; newProjectId?: string }
+  >,
   getTotalAccounts?: () => Promise<number>, // 전체 계정 수 조회
 ): AxiosInstance {
   const client = axios.create({
@@ -120,12 +122,34 @@ export function createApiClient(
         );
 
         if (retryCount < maxRetries) {
-          const rotated = await onRateLimited();
+          const result = await onRateLimited();
+          const rotated = typeof result === "object" ? result.rotated : result;
+          const newProjectId =
+            typeof result === "object" ? result.newProjectId : undefined;
 
           if (rotated) {
             originalRequest._retryCount = retryCount + 1;
 
             console.log(`[Castor/Client] Rotated to next account, retrying...`);
+
+            // 새 프로젝트 ID가 있으면 Request Body 업데이트
+            if (newProjectId && originalRequest.data) {
+              try {
+                const data = JSON.parse(originalRequest.data);
+                if (data.project) {
+                  console.log(
+                    `[Castor/Client] Updating project ID in request body: ${data.project} -> ${newProjectId}`,
+                  );
+                  data.project = newProjectId;
+                  originalRequest.data = JSON.stringify(data);
+                }
+              } catch (e) {
+                console.warn(
+                  "[Castor/Client] Failed to parse/update request body:",
+                  e,
+                );
+              }
+            }
 
             // 잠시 대기 후 재시도 (500ms)
             await new Promise((resolve) => setTimeout(resolve, 500));
@@ -198,7 +222,7 @@ export async function createAntigravityClient(
       const { setCurrentAccount } = await import("../providers/antigravity.js");
       setCurrentAccount(nextAccount.email, nextAccount.projectId);
 
-      return true;
+      return { rotated: true, newProjectId: nextAccount.projectId };
     },
     async () => {
       // 전체 계정 수 반환

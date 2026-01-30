@@ -165,12 +165,12 @@
           "enum": [
             "HIGH",
             "LOW",
-            "MINIMAL"
+            "OFF"
           ],
           "enumDescriptions": [
             "깊은 추론 (느림, 정확)",
             "빠른 추론",
-            "최소 추론 (빠름)"
+            "추론 없음 (즉시 응답)"
           ],
           "description": "AI 사고 레벨 (Gemini 3)"
         },
@@ -211,9 +211,10 @@
   },
   "dependencies": {
     "@google/genai": "^1.0.0",
-    "axios": "^1.6.0",
     "async-mutex": "^0.4.0",
-    "simple-git": "^3.21.0",
-    "puppeteer-core": "^21.6.0"
+    "axios": "^1.6.0",
+    "marked": "^17.0.1",
+    "puppeteer-core": "^21.6.0",
+    "simple-git": "^3.21.0"
   }
 }

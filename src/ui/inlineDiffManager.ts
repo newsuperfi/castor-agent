@@ -37,6 +37,61 @@ let hunkSeparatorDecoration: vscode.TextEditorDecorationType;
 let codeLensProvider: vscode.Disposable | undefined;
 let codeLensEventEmitter: vscode.EventEmitter<void>;
 let isInitialized = false;
+let extensionContext: vscode.ExtensionContext; // 영구 저장용 context
+
+const PENDING_EDITS_KEY = "castor.pendingEdits";
+
+/**
+ * Pending Edits를 globalState에 저장
+ */
+async function savePendingEdits(): Promise<void> {
+  if (!extensionContext) return;
+
+  // Map을 직렬화 가능한 형태로 변환
+  const serializable: Array<[string, PendingFileEdit]> = Array.from(
+    pendingEdits.entries(),
+  );
+  await extensionContext.globalState.update(PENDING_EDITS_KEY, serializable);
+}
+
+/**
+ * globalState에서 Pending Edits 복원
+ */
+async function loadPendingEdits(): Promise<void> {
+  if (!extensionContext) return;
+
+  const saved =
+    extensionContext.globalState.get<Array<[string, PendingFileEdit]>>(
+      PENDING_EDITS_KEY,
+    );
+  if (!saved || saved.length === 0) return;
+
+  for (const [filePath, edit] of saved) {
+    // pending 상태인 것만 복원
+    if (
+      edit.status === "pending" &&
+      edit.hunks.some((h) => h.status === "pending")
+    ) {
+      pendingEdits.set(filePath, edit);
+    }
+  }
+
+  // 복원된 파일이 있으면 CodeLens 갱신 및 알림
+  if (pendingEdits.size > 0) {
+    codeLensEventEmitter?.fire();
+    vscode.window.showInformationMessage(
+      `${pendingEdits.size}개의 미적용 변경사항이 복원되었습니다. Accept/Reject를 선택해주세요.`,
+    );
+
+    // 복원된 파일 열기 (첫 번째 파일)
+    const firstFilePath = Array.from(pendingEdits.keys())[0];
+    if (firstFilePath) {
+      const doc = await vscode.workspace.openTextDocument(firstFilePath);
+      const editor = await vscode.window.showTextDocument(doc);
+      updateDecorations(editor);
+    }
+  }
+}
 
 /**
  * 인라인 diff 매니저 초기화
@@ -44,6 +99,7 @@ let isInitialized = false;
 export function initInlineDiffManager(context: vscode.ExtensionContext): void {
   if (isInitialized) return;
   isInitialized = true;
+  extensionContext = context; // 영구 저장용 context 저장
 
   // 추가된 줄 스타일
   addedDecoration = vscode.window.createTextEditorDecorationType({
@@ -214,6 +270,9 @@ export function initInlineDiffManager(context: vscode.ExtensionContext): void {
       }
     }),
   );
+
+  // 저장된 Pending Edits 복원
+  loadPendingEdits();
 }
 
 /**
@@ -390,6 +449,9 @@ export async function showInlineDiff(
     newContent,
   };
 
+  // 영구 저장
+  await savePendingEdits();
+
   return editId;
 }
 
@@ -443,6 +505,7 @@ async function acceptHunk(filePath: string, hunkId: string): Promise<void> {
   if (!hunk) return;
 
   hunk.status = "accepted";
+  await savePendingEdits(); // 영구 저장
 
   // 모든 hunk가 처리되었는지 확인
   const pendingHunks = edit.hunks.filter((h) => h.status === "pending");
@@ -472,6 +535,7 @@ async function rejectHunk(filePath: string, hunkId: string): Promise<void> {
   if (!hunk) return;
 
   hunk.status = "rejected";
+  await savePendingEdits(); // 영구 저장
 
   // Reject된 hunk의 원본 내용으로 되돌리기 위해 전체 재계산 필요
   // 현재는 간단하게: reject된 hunk를 제외하고 나머지 accepted로 처리
@@ -631,6 +695,7 @@ async function finalizeEdit(filePath: string): Promise<void> {
   // 상태를 completed로 변경 (Undo 시 복구 가능)
   edit.status = "completed";
   codeLensEventEmitter.fire();
+  await savePendingEdits(); // 영구 저장 (completed 상태도 저장)
 
   // global state 정리
   const globalState = global as Record<string, unknown>;

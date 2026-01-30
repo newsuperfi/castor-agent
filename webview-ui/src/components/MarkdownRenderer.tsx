@@ -153,10 +153,23 @@ export function MarkdownRenderer({ content }: MarkdownRendererProps) {
 }
 
 /**
- * 코드 블록 컴포넌트 (복사 버튼 + 실행 버튼 포함)
+ * 코드 블록 컴포넌트 (복사 버튼 + 실행 버튼 + 접기/펼치기 기능)
  */
 function CodeBlock({ language, code }: { language: string; code: string }) {
   const [copied, setCopied] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  // 줄 수 계산
+  const lines = code.split("\n");
+  const lineCount = lines.length;
+  const COLLAPSE_THRESHOLD = 10; // 10줄 이상이면 접기
+  const shouldCollapse = lineCount > COLLAPSE_THRESHOLD;
+
+  // 접힌 상태일 때 보여줄 코드 (처음 10줄)
+  const displayCode =
+    shouldCollapse && !isExpanded
+      ? lines.slice(0, COLLAPSE_THRESHOLD).join("\n")
+      : code;
 
   // 실행 가능한 언어인지 확인
   const isExecutable = ["bash", "sh", "zsh", "shell"].includes(
@@ -184,7 +197,14 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
     <div className="relative group my-2 rounded-lg overflow-hidden">
       {/* 언어 라벨 + 버튼들 */}
       <div className="flex items-center justify-between px-3 py-1.5 bg-[#1e1e1e] text-xs border-b border-[#3c3c3c]">
-        <span className="opacity-60">{language || "code"}</span>
+        <span className="opacity-60">
+          {language || "code"}
+          {shouldCollapse && (
+            <span className="ml-2 text-vscode-foreground/50">
+              ({lineCount}줄)
+            </span>
+          )}
+        </span>
         <div className="flex gap-1">
           {/* 실행 버튼 (실행 가능한 언어만) */}
           {isExecutable && (
@@ -217,8 +237,23 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
         }}
         wrapLongLines
       >
-        {code}
+        {displayCode}
       </SyntaxHighlighter>
+      {/* 접기/펼치기 버튼 */}
+      {shouldCollapse && (
+        <button
+          onClick={() => setIsExpanded(!isExpanded)}
+          className="w-full py-2 text-xs text-center bg-[#1e1e1e] hover:bg-[#2d2d2d] border-t border-[#3c3c3c] transition-colors"
+        >
+          {isExpanded ? (
+            <span>
+              ▲ 접기 ({lineCount}줄 → {COLLAPSE_THRESHOLD}줄)
+            </span>
+          ) : (
+            <span>▼ 펼치기 ({lineCount - COLLAPSE_THRESHOLD}줄 더 보기)</span>
+          )}
+        </button>
+      )}
     </div>
   );
 }

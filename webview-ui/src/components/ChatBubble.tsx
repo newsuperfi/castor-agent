@@ -54,9 +54,49 @@ export function ChatBubble({ message }: ChatBubbleProps) {
           </details>
         )}
 
-        {/* 메시지 내용 - 마크다운 렌더링 */}
+        {/* 메시지 내용 - 마크다운 렌더링 또는 Plan 버튼 */}
         <div className="prose prose-invert prose-sm max-w-none">
-          {isUser ? (
+          {message.uiType === "plan" ? (
+            <div className="flex flex-col items-start gap-3">
+              <p className="text-sm opacity-80">구현 계획이 생성되었습니다.</p>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    useStore.getState().executeCommand("castor.openPlan")
+                  }
+                  className="btn-secondary text-xs px-3 py-2 flex items-center gap-2"
+                >
+                  <span>📋</span>
+                  <span>계획 확인</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    useStore
+                      .getState()
+                      .executeCommand("castor.plan.executeLatest")
+                  }
+                  className="btn-primary text-xs px-3 py-2 flex items-center gap-2"
+                >
+                  <span>🚀</span>
+                  <span>계획 실행</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    useStore
+                      .getState()
+                      .executeCommand("castor.plan.reviewLatest")
+                  }
+                  className="btn-secondary text-xs px-3 py-2 flex items-center gap-2"
+                >
+                  <span>💬</span>
+                  <span>AI 리뷰</span>
+                </button>
+              </div>
+            </div>
+          ) : isUser ? (
             <p className="whitespace-pre-wrap break-words">{message.content}</p>
           ) : (
             <MarkdownRenderer content={message.content} />

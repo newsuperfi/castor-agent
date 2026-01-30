@@ -33,6 +33,7 @@ import {
   getSelectedTextContext,
   parseFileMentions,
 } from "../utils/contextUtils.js";
+import { PlanPreviewPanel } from "./planPreviewPanel.js";
 
 /**
  * Sidebar 채팅창 Webview Provider
@@ -298,6 +299,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           },
         );
         break;
+
+      case "executeCommand":
+        await vscode.commands.executeCommand(
+          (message.payload as { command: string }).command,
+        );
+        break;
     }
   }
 
@@ -308,10 +315,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     content: string;
     model?: AIModel;
     mode?: "edit" | "plan";
+    thinkingLevel?: string; // webview에서 소문자로 옴
   }): Promise<void> {
     vscode.window.showInformationMessage(
       `[Castor] handleSendMessage: ${payload.content.substring(0, 30)}`,
     );
+    const config = vscode.workspace.getConfiguration("castor");
+
     console.log(
       "[Castor] handleSendMessage called with:",
       payload.content.substring(0, 50),
@@ -432,9 +442,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       }
 
       // 스트리밍 응답 처리
+      // thinkingLevel: webview(소문자) -> provider(대문자) 변환
+      const thinkingLevel = (
+        payload.thinkingLevel ||
+        config.get<string>("thinkingLevel") ||
+        "HIGH"
+      ).toUpperCase();
+
       const options = {
         model: payload.model || ("gemini-3-flash-preview" as AIModel),
-        thinkingLevel: "HIGH" as const,
+        thinkingLevel: thinkingLevel as import("../types.js").ThinkingLevel,
       };
 
       vscode.window.showInformationMessage(
@@ -459,6 +476,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
           switch (event.type) {
             case "thinking":
+              if (event.thoughtSignature) {
+                assistantMessage.thoughtSignature = event.thoughtSignature;
+              }
               assistantMessage.thinking =
                 (assistantMessage.thinking || "") + event.content;
               this.postMessage({
@@ -521,7 +541,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       );
 
       // 응답이 비어있으면 fallback 메시지
-      if (!assistantMessage.content.trim()) {
+      // 단, 도구 호출이 있으면 정상 응답으로 간주
+      const hasToolCalls =
+        assistantMessage.toolCalls && assistantMessage.toolCalls.length > 0;
+      if (!assistantMessage.content.trim() && !hasToolCalls) {
         assistantMessage.content =
           "⚠️ AI 응답을 받지 못했습니다. 잠시 후 다시 시도해주세요.";
       }
@@ -538,13 +561,14 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       assistantMessage.content = userMessage;
     }
 
-    this.messages.push(assistantMessage);
-    this.postMessage({ type: "receiveMessage", payload: assistantMessage });
-
-    // Plan 모드에서는 Markdown Preview로 표시
+    // Plan 모드에서는 먼저 uiType 설정 후 Markdown Preview로 표시
     if (payload.mode === "plan" && assistantMessage.content.trim()) {
+      assistantMessage.uiType = "plan"; // Webview에서는 버튼으로 표시
       await this.showImplementationPlan(assistantMessage.content);
     }
+
+    this.messages.push(assistantMessage);
+    this.postMessage({ type: "receiveMessage", payload: assistantMessage });
 
     // 세션 저장
     await this.saveCurrentSession();
@@ -579,7 +603,16 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     // Markdown 파일 생성
     const planPath = path.join(projectDir, "implementation_plan.md");
+    const planUriObj = vscode.Uri.file(planPath);
+
+    // Command Link 생성
+    const args = encodeURIComponent(JSON.stringify([planUriObj]));
+    const executeLink = `[🚀 계획 실행](command:castor.plan.execute?${args})`;
+    const reviewLink = `[💬 AI 리뷰](command:castor.plan.review?${args})`;
+
     const markdownContent = `# Implementation Plan
+
+> ${executeLink} &nbsp;&nbsp; ${reviewLink}
 
 ${content}
 
@@ -588,11 +621,177 @@ ${content}
 `;
     await fs.writeFile(planPath, markdownContent, "utf-8");
 
-    // Markdown 파일 열기 및 프리뷰 표시
-    const planUri = vscode.Uri.file(planPath);
-    const doc = await vscode.workspace.openTextDocument(planUri);
-    await vscode.window.showTextDocument(doc, vscode.ViewColumn.One);
-    await vscode.commands.executeCommand("markdown.showPreview", planUri);
+    // 커스텀 Webview Panel로 Implementation Plan 표시
+    PlanPreviewPanel.createOrShow(
+      this.context.extensionUri,
+      vscode.Uri.file(planPath),
+      markdownContent,
+    );
+  }
+
+  /**
+   * 저장된 Implementation Plan 열기 (공개 메서드)
+   */
+  public async openLastImplementationPlan(): Promise<void> {
+    const fs = await import("fs/promises");
+    const path = await import("path");
+    const crypto = await import("crypto");
+
+    // 프로젝트별 디렉토리 계산
+    const workspaceFolder =
+      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || "default";
+    const projectHash = crypto
+      .createHash("md5")
+      .update(workspaceFolder)
+      .digest("hex")
+      .slice(0, 8);
+    const projectName = path.basename(workspaceFolder);
+
+    const projectDir = path.join(
+      this.context.globalStorageUri.fsPath,
+      "projects",
+      `${projectName}-${projectHash}`,
+    );
+    const planPath = path.join(projectDir, "implementation_plan.md");
+
+    try {
+      await fs.access(planPath); // 파일 존재 확인
+      const content = await fs.readFile(planPath, "utf-8");
+      // 커스텀 Webview Panel로 표시
+      PlanPreviewPanel.createOrShow(
+        this.context.extensionUri,
+        vscode.Uri.file(planPath),
+        content,
+      );
+    } catch {
+      vscode.window.showInformationMessage("아직 생성된 구현 계획이 없습니다.");
+    }
+  }
+
+  /**
+   * 구현 계획 실행 (CodeLens)
+   */
+  public async executePlanFromURI(uri: vscode.Uri): Promise<void> {
+    const fs = await import("fs/promises");
+    try {
+      const content = await fs.readFile(uri.fsPath, "utf-8");
+
+      // Webview에 사용자 메시지 표시
+      const userContent = "이 구현 계획대로 코드를 작성해 줘.";
+
+      // 실제 처리 (request 구조체 생성)
+      // text -> content로 수정 (handleSendMessage 스펙 준수)
+      // 주의: 여기서 코드 블록으로 감싸면 중첩된 백틱으로 JSON 파싱 오류 발생
+      const payload = {
+        content: `${userContent}\n\n---\n\n${content}`,
+        mode: "edit" as const, // 실행은 Edit 모드로
+        thinkingLevel: "HIGH" as const, // 기본값
+      };
+
+      // 1. Webview에 사용자 메시지 추가 (UI 업데이트)
+      this.postMessage({
+        type: "receiveMessage",
+        payload: {
+          id: Date.now().toString(),
+          role: "user",
+          content: userContent, // UI에는 짧게 표시
+          timestamp: Date.now(),
+        },
+      });
+
+      // 2. 메시지 처리
+      await this.handleSendMessage(payload as any);
+    } catch (error) {
+      vscode.window.showErrorMessage(`계획 파일 읽기 실패: ${error}`);
+    }
+  }
+
+  /**
+   * 구현 계획 리뷰 (CodeLens)
+   */
+  public async reviewPlanFromURI(uri: vscode.Uri): Promise<void> {
+    const fs = await import("fs/promises");
+    try {
+      const content = await fs.readFile(uri.fsPath, "utf-8");
+
+      const userContent = "이 구현 계획을 리뷰하고 개선점을 알려줘.";
+
+      const payload = {
+        content: `${userContent}\n\n---\n\n${content}`,
+        mode: "plan" as const, // 리뷰는 Plan 모드로 유지
+        thinkingLevel: "HIGH" as const,
+      };
+
+      this.postMessage({
+        type: "receiveMessage",
+        payload: {
+          id: Date.now().toString(),
+          role: "user",
+          content: userContent,
+          timestamp: Date.now(),
+        },
+      });
+
+      await this.handleSendMessage(payload as any);
+    } catch (error) {
+      vscode.window.showErrorMessage(`계획 파일 읽기 실패: ${error}`);
+    }
+  }
+
+  /**
+   * 최신 구현 계획 실행 (Webview 버튼용)
+   */
+  public async executeLatestPlan(): Promise<void> {
+    const planUri = await this.getLatestPlanUri();
+    if (planUri) {
+      await this.executePlanFromURI(planUri);
+    } else {
+      vscode.window.showWarningMessage("아직 생성된 구현 계획이 없습니다.");
+    }
+  }
+
+  /**
+   * 최신 구현 계획 AI 리뷰 (Webview 버튼용)
+   */
+  public async reviewLatestPlan(): Promise<void> {
+    const planUri = await this.getLatestPlanUri();
+    if (planUri) {
+      await this.reviewPlanFromURI(planUri);
+    } else {
+      vscode.window.showWarningMessage("아직 생성된 구현 계획이 없습니다.");
+    }
+  }
+
+  /**
+   * 최신 구현 계획 파일 경로 가져오기
+   */
+  private async getLatestPlanUri(): Promise<vscode.Uri | null> {
+    const fs = await import("fs/promises");
+    const path = await import("path");
+    const crypto = await import("crypto");
+
+    const workspaceFolder =
+      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || "default";
+    const projectHash = crypto
+      .createHash("md5")
+      .update(workspaceFolder)
+      .digest("hex")
+      .slice(0, 8);
+    const projectName = path.basename(workspaceFolder);
+
+    const projectDir = path.join(
+      this.context.globalStorageUri.fsPath,
+      "projects",
+      `${projectName}-${projectHash}`,
+    );
+    const planPath = path.join(projectDir, "implementation_plan.md");
+
+    try {
+      await fs.access(planPath);
+      return vscode.Uri.file(planPath);
+    } catch {
+      return null;
+    }
   }
 
   /**

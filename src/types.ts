@@ -3,7 +3,7 @@
  */
 
 // AI 제공자 관련 타입
-export type ThinkingLevel = "HIGH" | "LOW" | "MINIMAL";
+export type ThinkingLevel = "HIGH" | "LOW" | "OFF";
 
 export type AntigravityModel =
   | "gemini-3-pro-preview"
@@ -22,6 +22,7 @@ export type AIModel = AntigravityModel | PersonalModel;
 
 export interface GenerateOptions {
   model: AIModel;
+  mode?: "edit" | "plan"; // edit: 도구 사용, plan: 구현 계획만 작성
   thinkingLevel?: ThinkingLevel;
   thinkingBudget?: number;
 }
@@ -35,8 +36,10 @@ export interface ChatMessage {
   content: string;
   timestamp: number;
   thinking?: string;
+  thoughtSignature?: string; // Gemini Thinking Process 서명 (Tool Use 필수)
   toolCalls?: ToolCall[];
   tokenUsage?: TokenUsage;
+  uiType?: "default" | "plan"; // UI 표시 방식 (일반 텍스트 vs 구현 계획 버튼)
 }
 
 export interface TokenUsage {
@@ -100,6 +103,7 @@ export interface IAIProvider {
 export interface StreamChunk {
   type: "thinking" | "text" | "tool_call" | "token_usage" | "error";
   content: string;
+  thoughtSignature?: string; // Gemini Thinking Process 서명
   toolCall?: ToolCall;
   tokenUsage?: TokenUsage;
 }
@@ -160,15 +164,12 @@ export type WebviewMessageType =
   | "abortStreaming"
   // 대화 내보내기
   | "exportConversation"
-  // 코드 블록 실행
+  | "executeCommand"
   | "runCodeBlock"
-  // Diff Accept/Reject
-  | "pendingChanges"
   | "acceptChange"
   | "rejectChange"
   | "acceptAllChanges"
   | "rejectAllChanges"
-  // Editor Diff View
   | "showDiffInEditor";
 
 export interface WebviewMessage {

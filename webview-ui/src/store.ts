@@ -25,6 +25,7 @@ interface ChatMessage {
   role: "user" | "assistant" | "system";
   content: string;
   timestamp: number;
+  uiType?: "default" | "plan";
   thinking?: string;
   toolCalls?: ToolCall[];
   tokenUsage?: {
@@ -52,7 +53,7 @@ type GeminiCliModel =
 type AIModel = AntigravityModel | GeminiCliModel;
 
 // 사고 레벨 (모델별로 지원 범위 다름)
-type ThinkingLevel = "high" | "medium" | "low" | "minimal";
+type ThinkingLevel = "high" | "low" | "off";
 
 // 에이전트 모드
 type AgentMode = "edit" | "plan";
@@ -120,6 +121,7 @@ interface AppState {
   acceptAllChanges: () => void;
   rejectAllChanges: () => void;
   setPendingChanges: (changes: FileChange[]) => void;
+  executeCommand: (command: string, args?: any[]) => void;
 }
 
 // 파일 변경사항 타입
@@ -145,15 +147,15 @@ interface SessionSummary {
 // 모델별 지원 thinking level
 const MODEL_THINKING_LEVELS: Record<string, ThinkingLevel[]> = {
   // Antigravity 모델
-  "antigravity-gemini-3-pro": ["low", "high"],
-  "antigravity-gemini-3-flash": ["minimal", "low", "medium", "high"],
-  "antigravity-claude-sonnet-4-5-thinking": ["low", "high"],
-  "antigravity-claude-opus-4-5-thinking": ["low", "high"],
+  "antigravity-gemini-3-pro": ["off", "low", "high"],
+  "antigravity-gemini-3-flash": ["off", "low", "high"],
+  "antigravity-claude-sonnet-4-5-thinking": ["off", "low", "high"],
+  "antigravity-claude-opus-4-5-thinking": ["off", "low", "high"],
   // Gemini-CLI 모델 (preview)
-  "gemini-3-pro-preview": ["low", "medium", "high"],
-  "gemini-3-flash-preview": ["low", "medium", "high"],
-  "gemini-2.5-pro": ["low", "medium", "high"],
-  "gemini-2.5-flash": ["low", "medium", "high"],
+  "gemini-3-pro-preview": ["off", "low", "high"],
+  "gemini-3-flash-preview": ["off", "low", "high"],
+  "gemini-2.5-pro": ["off", "low", "high"],
+  "gemini-2.5-flash": ["off", "low", "high"],
 };
 
 // VS Code API 인스턴스
@@ -298,6 +300,10 @@ export const useStore = create<AppState>((set, get) => ({
   abortStreaming: () => {
     vscode?.postMessage({ type: "abortStreaming", payload: {} });
     set({ isStreaming: false });
+  },
+
+  executeCommand: (command: string, args?: any[]) => {
+    vscode?.postMessage({ type: "executeCommand", payload: { command, args } });
   },
 
   // Diff Accept/Reject

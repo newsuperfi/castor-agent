@@ -1,4 +1,7 @@
 import * as vscode from "vscode";
+import { PlanningCodeLensProvider } from "./providers/planning/planningCodeLensProvider.js";
+import { PlanningCreateHandler } from "./providers/planning/planningCommandHandlers.js";
+import { PlanningCommentController } from "./providers/planning/planningCommentController.js";
 import { SidebarProvider } from "./ui/sidebarProvider.js";
 
 /**
@@ -110,12 +113,38 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
   );
 
+  // Planning CodeLens 등록
   context.subscriptions.push(
-    vscode.commands.registerCommand("castor.openPlan", () => {
-      // TODO: 플래닝 패널 구현
-      vscode.window.showInformationMessage(
-        "플래닝 보드 기능은 Phase 2에서 구현됩니다.",
-      );
+    vscode.languages.registerCodeLensProvider(
+      { scheme: "file", pattern: "**\/implementation_plan.md" },
+      new PlanningCodeLensProvider(context),
+    ),
+  );
+
+  // Planning Handlers 등록
+  const planningHandler = new PlanningCreateHandler(context, sidebarProvider);
+  planningHandler.register();
+
+  // Planning Comments 등록
+  new PlanningCommentController(context);
+
+  context.subscriptions.push(
+    vscode.commands.registerCommand("castor.openPlan", async () => {
+      await sidebarProvider.openLastImplementationPlan();
+    }),
+  );
+
+  // Webview 버튼용: 최신 플랜 실행
+  context.subscriptions.push(
+    vscode.commands.registerCommand("castor.plan.executeLatest", async () => {
+      await sidebarProvider.executeLatestPlan();
+    }),
+  );
+
+  // Webview 버튼용: 최신 플랜 AI 리뷰
+  context.subscriptions.push(
+    vscode.commands.registerCommand("castor.plan.reviewLatest", async () => {
+      await sidebarProvider.reviewLatestPlan();
     }),
   );
 

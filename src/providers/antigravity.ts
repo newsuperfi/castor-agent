@@ -439,21 +439,33 @@ export class AntigravityProvider implements IAIProvider {
         msg.toolCalls &&
         msg.toolCalls.length > 0
       ) {
-        const parts: unknown[] = [];
+        const parts: Record<string, unknown>[] = [];
 
-        // 텍스트가 있으면 먼저 추가
+        // thoughtSignature가 있으면 먼저 추가 (Gemini API 요구사항)
+        // 주의: thoughtSignature는 functionCall과 같은 part에 있어야 함!
+        // if (msg.thoughtSignature) {
+        //   parts.push({ thoughtSignature: msg.thoughtSignature });
+        // }
+
+        // 텍스트가 있으면 추가
         if (msg.content) {
           parts.push({ text: msg.content });
         }
 
-        // 도구 호출 추가
-        for (const tc of msg.toolCalls) {
-          parts.push({
+        // 도구 호출 추가 (thoughtSignature를 첫 번째 functionCall part에 포함)
+        for (let i = 0; i < msg.toolCalls.length; i++) {
+          const tc = msg.toolCalls[i];
+          const part: Record<string, unknown> = {
             functionCall: {
               name: tc.name,
               args: tc.arguments,
             },
-          });
+          };
+          // Gemini API 요구사항: thoughtSignature가 있으면 functionCall part에 포함
+          if (i === 0 && msg.thoughtSignature) {
+            part.thoughtSignature = msg.thoughtSignature;
+          }
+          parts.push(part);
         }
 
         return {
@@ -479,10 +491,16 @@ export class AntigravityProvider implements IAIProvider {
     if (isGemini3Model(options.model)) {
       // Gemini 3: thinkingLevel 사용 (대문자 유지 - gemini-cli 공식)
       // Ref: defaultModelConfigs.ts - ThinkingLevel.HIGH
-      generationConfig.thinkingConfig = {
-        includeThoughts: true,
-        thinkingLevel: options.thinkingLevel || "HIGH",
-      };
+      if (options.thinkingLevel === "OFF") {
+        generationConfig.thinkingConfig = {
+          includeThoughts: false,
+        };
+      } else {
+        generationConfig.thinkingConfig = {
+          includeThoughts: true,
+          thinkingLevel: options.thinkingLevel || "HIGH",
+        };
+      }
     } else if (isClaudeModel(options.model)) {
       // Claude: snake_case 및 thinking_budget 사용
       generationConfig.thinkingConfig = {
@@ -505,17 +523,41 @@ export class AntigravityProvider implements IAIProvider {
     const sessionId = "";
 
     // 시스템 프롬프트: AI가 VS Code 확장에서 동작하고 도구를 사용할 수 있음을 알림
-    const systemInstruction = {
-      parts: [
-        {
-          text: `You are Castor, an AI coding assistant integrated into VS Code.
+    // Plan 모드에서는 도구 사용을 자제하고 구현 계획만 작성하도록 지시
+    const isPlanMode = options.mode === "plan";
+
+    const basePrompt = `You are Castor, an AI coding assistant integrated into VS Code.
 You have access to tools that allow you to:
 - Read and write files in the user's workspace
 - Execute terminal commands
 - Search code and navigate the codebase
-- Make code edits and refactors
+- Make code edits and refactors`;
 
-When the user asks you to modify code, create files, or run commands, you should use your available tools to accomplish the task directly.
+    const planModeInstruction = `
+
+**IMPORTANT: You are currently in PLAN MODE.**
+In Plan Mode, you should NOT execute any tools or write code directly.
+Instead, you should:
+1. Analyze the user's request carefully
+2. Create a detailed implementation plan in Markdown format
+3. Include file paths, function names, and step-by-step instructions
+4. Do NOT use write_file, run_command, or any other tools
+5. Just respond with the implementation plan as text
+
+The user will review your plan and then manually execute it or ask you to execute it in Edit Mode.`;
+
+    const editModeInstruction = `
+
+When the user asks you to modify code, create files, or run commands, you should use your available tools to accomplish the task directly.`;
+
+    const systemInstruction = {
+      parts: [
+        {
+          text:
+            basePrompt +
+            (isPlanMode ? planModeInstruction : editModeInstruction) +
+            `
+
 Always respond in the same language as the user's message.
 Be concise and helpful. Focus on solving the user's problem efficiently.`,
         },
@@ -590,6 +632,7 @@ Be concise and helpful. Focus on solving the user's problem efficiently.`,
             parts?: Array<{
               text?: string;
               thought?: boolean;
+              thoughtSignature?: string; // functionCall에 필요
               functionCall?: {
                 name: string;
                 args: Record<string, unknown>;
@@ -610,6 +653,16 @@ Be concise and helpful. Focus on solving the user's problem efficiently.`,
         yield { type: "thinking", content: part.text };
       } else if (part.text) {
         yield { type: "text", content: part.text };
+      }
+
+      // thoughtSignature 추출
+      if (part.thoughtSignature) {
+        console.log("[Castor/Provider] Got thoughtSignature");
+        yield {
+          type: "thinking", // 처리를 위해 thinking 타입 재사용 (또는 별도 처리)
+          content: "",
+          thoughtSignature: part.thoughtSignature,
+        };
       }
 
       if (part.functionCall) {

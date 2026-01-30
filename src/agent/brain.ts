@@ -22,6 +22,7 @@ const DANGEROUS_TOOLS = new Set(["write_file", "run_command", "apply_diff"]);
 
 export interface AgentTurn {
   thinking?: string;
+  thoughtSignature?: string;
   text?: string;
   toolCalls: ToolCall[];
 }
@@ -45,6 +46,7 @@ type AgentEventType =
 export interface AgentEvent {
   type: AgentEventType;
   content?: string;
+  thoughtSignature?: string;
   toolCall?: ToolCall;
   error?: Error;
 }
@@ -127,8 +129,17 @@ export class AgentBrain {
           if (this.state.aborted) break;
 
           if (chunk.type === "thinking") {
-            turn.thinking = (turn.thinking || "") + chunk.content;
-            yield { type: "thinking", content: chunk.content };
+            if (chunk.thoughtSignature) {
+              turn.thoughtSignature = chunk.thoughtSignature;
+              yield {
+                type: "thinking",
+                content: "",
+                thoughtSignature: chunk.thoughtSignature,
+              };
+            } else {
+              turn.thinking = (turn.thinking || "") + chunk.content;
+              yield { type: "thinking", content: chunk.content };
+            }
           } else if (chunk.type === "text") {
             turn.text = (turn.text || "") + chunk.content;
             yield { type: "text", content: chunk.content };
@@ -186,6 +197,7 @@ export class AgentBrain {
           content: turn.text || "",
           timestamp: Date.now(),
           toolCalls: turn.toolCalls,
+          thoughtSignature: turn.thoughtSignature, // 다음 요청 위해 저장
         };
         conversationMessages.push(assistantMessage);
 
